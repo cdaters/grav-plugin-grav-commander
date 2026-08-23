@@ -219,7 +219,7 @@ form:
     backup.path:
       type: text
       label: Backup storage path
-      help: Absolute paths are allowed, e.g. /home/retrorealm/gcmdr_backups. Relative paths are resolved from the Grav root, so ../gcmdr_backups points one level above the site root. Recommended: keep backups outside the public site tree. On typical cPanel hosting, ../gcmdr_backups resolves beside public_html, e.g. /home/retrorealm/gcmdr_backups.
+      help: "Absolute paths are allowed, e.g. /home/retrorealm/gcmdr_backups. Relative paths are resolved from the Grav root, so ../gcmdr_backups points one level above the site root. Recommended: keep backups outside the public site tree. On typical cPanel hosting, ../gcmdr_backups resolves beside public_html, e.g. /home/retrorealm/gcmdr_backups."
       default: ../gcmdr_backups
 
     backup.max_backups:
@@ -233,7 +233,7 @@ form:
     backup.archive_name_template:
       type: text
       label: Backup archive name template
-      help: The .zip extension is added automatically. Useful tokens: [PREFIX], [HOST], [SITENAME], [PROFILE], [PROFILE_LABEL], [DATE], [TIME], [TIME_TZ], [TZ], [GMT_OFFSET], [SCOPE], [REASON], [ROOT], [PATH], [VERSION], [RANDOM]. Default keeps names short and uses gcmdr instead of grav-commander.
+      help: "The .zip extension is added automatically. Useful tokens: [PREFIX], [HOST], [SITENAME], [PROFILE], [PROFILE_LABEL], [DATE], [TIME], [TIME_TZ], [TZ], [GMT_OFFSET], [SCOPE], [REASON], [ROOT], [PATH], [VERSION], [RANDOM]. Default keeps names short and uses gcmdr instead of grav-commander."
       default: gcmdr-[HOST]-[PROFILE]-[DATE]-[TIME_TZ]
 
     backup.add_random_if_inside_site_root:

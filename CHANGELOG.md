@@ -10,6 +10,7 @@
     * Backup downloads now use a true tokenized browser-streaming route for large ZIP archives.
 3. [](#bugfix)
     * Fixed backup downloads in Admin2 by opening a non-API tokenized route instead of fetching full ZIP archives into JavaScript Blob memory.
+    * Quoted the backup-path and archive-name help text so embedded colons remain valid YAML and cannot prevent Grav from loading the plugin blueprint.
 
 # v0.3.10
 ## 05/16/2026

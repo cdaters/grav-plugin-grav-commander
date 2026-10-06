@@ -71,16 +71,47 @@ class ApiController extends AbstractApiController
     {
         $this->requireCommanderPermission($request, 'grav-commander.write');
         $body = $this->getRequestBody($request);
-        $this->requireFields($body, ['root', 'path', 'content']);
-        return ApiResponse::create($this->service()->write((string) $body['root'], (string) $body['path'], (string) $body['content']));
+        $this->requireFields($body, ['root', 'path']);
+        if (!isset($body['content']) || !is_string($body['content'])) throw new ValidationException('Content must be text.');
+        return ApiResponse::create($this->service()->write((string) $body['root'], (string) $body['path'], (string) $body['content'], isset($body['revision']) ? (string) $body['revision'] : null));
+    }
+
+    public function operate(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requireCommanderPermission($request, 'grav-commander.browse');
+        $this->requireCommanderPermission($request, 'grav-commander.write');
+        return ApiResponse::create($this->service()->operate($this->getRequestBody($request)));
+    }
+
+    public function createFile(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requireCommanderPermission($request, 'grav-commander.write');
+        $body = $this->getRequestBody($request);
+        $this->requireFields($body, ['root', 'name']);
+        return ApiResponse::create($this->service()->createFile((string) $body['root'], (string) ($body['path'] ?? ''), (string) $body['name']));
+    }
+
+    public function validate(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requireCommanderPermission($request, 'grav-commander.write');
+        $body = $this->getRequestBody($request);
+        $this->requireFields($body, ['path']);
+        return ApiResponse::create($this->service()->validateContent((string) $body['path'], (string) ($body['content'] ?? '')));
+    }
+
+    public function inspectArchive(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requireCommanderPermission($request, 'grav-commander.browse');
+        $params = $request->getQueryParams();
+        return ApiResponse::create($this->service()->inspectArchive((string) ($params['root'] ?? ''), (string) ($params['path'] ?? '')));
     }
 
     public function mkdir(ServerRequestInterface $request): ResponseInterface
     {
         $this->requireCommanderPermission($request, 'grav-commander.write');
         $body = $this->getRequestBody($request);
-        $this->requireFields($body, ['root', 'path', 'name']);
-        return ApiResponse::create($this->service()->mkdir((string) $body['root'], (string) $body['path'], (string) $body['name']));
+        $this->requireFields($body, ['root', 'name']);
+        return ApiResponse::create($this->service()->mkdir((string) $body['root'], (string) ($body['path'] ?? ''), (string) $body['name']));
     }
 
     public function upload(ServerRequestInterface $request): ResponseInterface

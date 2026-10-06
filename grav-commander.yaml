@@ -10,6 +10,9 @@ jarvis:
 
 max_upload_size: 10485760
 max_edit_size: 1048576
+# Coordinated operation preflight limits (including folder descendants).
+max_operation_files: 10000
+max_operation_bytes: 536870912
 allow_php_editing: false
 allow_recursive_delete: false
 auto_backup_on_write: true

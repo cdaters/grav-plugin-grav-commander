@@ -234,7 +234,7 @@ class FileService
         }
 
         return [
-            'plugin_version' => '0.3.14',
+            'plugin_version' => '0.4.0',
             'backup' => [
                 'enabled' => $backupEnabled,
                 'path' => $backupPath,
@@ -296,8 +296,10 @@ class FileService
 
             $full = $abs . '/' . $entry;
             $relative = $this->joinRelative($path, $entry);
+            if (is_link($full) || (!is_dir($full) && !is_file($full))) continue;
             $isDir = is_dir($full);
             $items[] = [
+                'identity' => $this->identity($full),
                 'name' => $entry,
                 'path' => $relative,
                 'type' => $isDir ? 'dir' : 'file',
@@ -361,6 +363,8 @@ class FileService
             'viewable' => true,
             'read_only' => !$editable,
             'content' => $content,
+            'revision' => hash('sha256', $content),
+            'identity' => $this->identity($abs),
         ];
     }
 
@@ -379,28 +383,216 @@ class FileService
         ];
     }
 
-    public function write(string $root, string $path, string $content): array
+    public function write(string $root, string $path, string $content, ?string $revision = null): array
     {
         $this->assertRootWritable($root);
         $abs = $this->resolve($root, $path, false);
         $this->assertEditablePath($abs);
+        $this->validateContent($path, $content);
         $this->ensureDirectory(dirname($abs));
-
-        if (file_exists($abs) && $this->autoBackup()) {
-            $this->backupPath($root, $path, 'pre-save');
+        $lock = fopen(sys_get_temp_dir() . '/grav-commander-save-' . hash('sha256', $abs) . '.lock', 'c');
+        if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) throw new ValidationException('Another save is in progress.');
+        $temporary = null;
+        try {
+            if ($revision !== null && (!is_file($abs) || !hash_equals($revision, hash_file('sha256', $abs)))) {
+                throw new ValidationException('File changed on disk. Reload and review before saving.');
+            }
+            if (is_file($abs) && !is_writable($abs)) throw new ForbiddenException('File is not writable.');
+            if (file_exists($abs) && $this->autoBackup()) $this->backupPath($root, $path, 'pre-save');
+            $temporary = tempnam(dirname($abs), '.commander-save-');
+            if (!$temporary || file_put_contents($temporary, $content) !== strlen($content)) throw new ValidationException('Unable to write complete file.');
+            chmod($temporary, is_file($abs) ? (fileperms($abs) & 0777) : 0664);
+            // Check again immediately before promotion, including external editors.
+            $this->resolve($root, $path, false);
+            if ($revision !== null && (!is_file($abs) || !hash_equals($revision, hash_file('sha256', $abs)))) throw new ValidationException('File changed during save. Reload and review.');
+            if (!rename($temporary, $abs)) throw new ValidationException('Unable to replace file.');
+            $temporary = null;
+            return ['message' => 'File saved.', 'root' => $root, 'path' => $this->sanitizeRelative($path), 'bytes' => strlen($content), 'revision' => hash('sha256', $content)];
+        } finally {
+            if ($temporary && is_file($temporary)) @unlink($temporary);
+            flock($lock, LOCK_UN); fclose($lock);
         }
+    }
 
-        $bytes = file_put_contents($abs, $content);
-        if ($bytes === false) {
-            throw new ValidationException('Unable to write file.');
+
+    /** Semantic labels are derived from physical Grav locations, never from a user root alias. */
+    private function identity(string $absolute): array
+    {
+        $pages = realpath($this->root . '/user/pages');
+        if ($pages && str_starts_with($absolute, $pages . '/')) {
+            $relative = substr($absolute, strlen($pages) + 1);
+            if (is_file($absolute) && preg_match('/\.(md|markdown)$/i', $absolute) && str_contains($relative, '/')) {
+                $route = preg_replace('/(^|\/)\d+\./', '$1', dirname($relative));
+                return ['kind' => 'Grav page', 'page_route' => $route];
+            }
+            return ['kind' => is_dir($absolute) ? 'Page folder · includes media' : 'Page media'];
         }
+        foreach (['plugins' => 'Plugin package', 'themes' => 'Theme package', 'config' => 'Grav configuration'] as $dir => $label) {
+            if (str_starts_with($absolute, $this->root . '/user/' . $dir . '/')) return ['kind' => $label];
+        }
+        return ['kind' => is_dir($absolute) ? 'Folder' : strtoupper(pathinfo($absolute, PATHINFO_EXTENSION)) . ' file'];
+    }
 
-        return [
-            'message' => 'File saved.',
-            'root' => $root,
-            'path' => $this->sanitizeRelative($path),
-            'bytes' => $bytes,
-        ];
+    public function validateContent(string $path, string $content): array
+    {
+        if (strlen($content) > (int) ($this->config['max_edit_size'] ?? 1048576)) throw new ValidationException('Content exceeds the edit size limit.');
+        try {
+            $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+            if (in_array($ext, ['yaml', 'yml'], true)) \Symfony\Component\Yaml\Yaml::parse($content);
+            if ($ext === 'json') json_decode($content, true, 512, JSON_THROW_ON_ERROR);
+            if (in_array($ext, ['md', 'markdown'], true) && preg_match('/\A---\R(.*?)\R---(?:\R|$)/s', $content, $match)) {
+                \Symfony\Component\Yaml\Yaml::parse($match[1]);
+            }
+        } catch (\Throwable $error) {
+            throw new ValidationException('Invalid document: ' . $error->getMessage());
+        }
+        return ['message' => 'Document validation passed.'];
+    }
+
+    public function createFile(string $root, string $path, string $name): array
+    {
+        $this->assertRootWritable($root);
+        $parent = $this->resolve($root, $path, true);
+        if (!is_dir($parent)) throw new ValidationException('Parent is not a directory.');
+        $relative = $this->joinRelative($path, $this->sanitizeName($name));
+        $abs = $this->resolve($root, $relative, false);
+        $this->assertEditablePath($abs);
+        $content = strtolower(pathinfo($abs, PATHINFO_EXTENSION)) === 'json' ? "{}\n" : '';
+        $stream = @fopen($abs, 'x');
+        if (!$stream) throw new ValidationException('File already exists or cannot be created.');
+        fwrite($stream, $content); fclose($stream);
+        return ['message' => 'File created.', 'path' => $relative];
+    }
+
+    private function assertZipEntryType(ZipArchive $zip, int $index): void
+    {
+        $opsys = 0; $attributes = 0;
+        if ($zip->getExternalAttributesIndex($index, $opsys, $attributes) && $opsys === 3) {
+            $type = ($attributes >> 16) & 0170000;
+            if (!in_array($type, [0, 0100000, 0040000], true)) throw new ForbiddenException('ZIP contains a symlink or special file.');
+        }
+    }
+
+    public function inspectArchive(string $root, string $path): array
+    {
+        $this->assertArchiveAllowed('inspect');
+        $abs = $this->resolve($root, $path, true);
+        if (!$this->isArchive($abs)) throw new ValidationException('Select a ZIP archive.');
+        $zip = new ZipArchive();
+        if ($zip->open($abs) !== true) throw new ValidationException('Unable to open ZIP.');
+        try {
+            $max = max(1, (int) ($this->config['archive']['max_extract_files'] ?? 5000));
+            if ($zip->numFiles > $max) throw new ValidationException('ZIP entry limit exceeded.');
+            $entries = []; $bytes = 0;
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                $stat = $zip->statIndex($i);
+                $this->assertZipEntryType($zip, $i);
+                $safe = $this->safeArchiveEntryName($stat['name']);
+                $bytes += (int) $stat['size'];
+                if ($bytes > (int) ($this->config['archive']['max_extract_bytes'] ?? 209715200)) throw new ValidationException('ZIP uncompressed size limit exceeded.');
+                if ($safe !== null) $entries[] = ['name' => $safe, 'size' => (int) $stat['size']];
+            }
+            return ['entries' => $entries, 'bytes' => $bytes];
+        } finally { $zip->close(); }
+    }
+
+    private function operationSource(string $root, string $path): string
+    {
+        if ($this->sanitizeRelative($path) === '') throw new ForbiddenException('Operating on an entire configured root is not allowed.');
+        $abs = $this->resolve($root, $path, true);
+        $count = 0; $bytes = 0;
+        $this->inspectTree($abs, $count, $bytes);
+        return $abs;
+    }
+
+    private function inspectTree(string $abs, int &$count, int &$bytes): void
+    {
+        if (is_link($abs) || (!is_file($abs) && !is_dir($abs))) throw new ForbiddenException('Symlinks and special files are not supported.');
+        if (++$count > (int) ($this->config['max_operation_files'] ?? 10000)) throw new ValidationException('Operation file limit exceeded. Split the selection.');
+        if (!is_readable($abs)) throw new ForbiddenException('Selection contains an unreadable item.');
+        if (is_file($abs)) {
+            $bytes += (int) filesize($abs);
+            if ($bytes > (int) ($this->config['max_operation_bytes'] ?? 536870912)) throw new ValidationException('Operation byte limit exceeded. Split the selection.');
+        } else {
+            foreach (scandir($abs) ?: [] as $entry) {
+                if ($entry !== '.' && $entry !== '..') $this->inspectTree($abs . '/' . $entry, $count, $bytes);
+            }
+        }
+    }
+
+    /** One bounded request; preflight the entire selection before the first mutation.
+     * Filesystem operations are not transactions: return exact completed/failed paths on I/O failure.
+     */
+    public function operate(array $body): array
+    {
+        $operation = (string) ($body['operation'] ?? '');
+        if (!in_array($operation, ['copy', 'move', 'delete', 'zip'], true)) throw new ValidationException('Unknown operation.');
+        $paths = $body['paths'] ?? null;
+        if (!is_array($paths) || !$paths || count($paths) > 200) throw new ValidationException('Select between 1 and 200 items.');
+        $root = (string) ($body['root'] ?? '');
+        $destRoot = (string) ($body['dest_root'] ?? $root);
+        $destPath = (string) ($body['dest_path'] ?? '');
+        $lock = fopen(sys_get_temp_dir() . '/grav-commander-' . hash('sha256', $this->root) . '.lock', 'c');
+        if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) throw new ValidationException('Another Commander batch is running.');
+        try {
+            if ($operation !== 'copy') $this->assertRootWritable($root);
+            if ($operation !== 'delete') {
+                $this->assertRootWritable($destRoot);
+                $dest = $this->resolve($destRoot, $destPath, true);
+                if (!is_dir($dest)) throw new ValidationException('Destination must be an existing folder.');
+            }
+            $tasks = []; $seen = []; $names = []; $count = 0; $bytes = 0;
+            foreach ($paths as $path) {
+                if (!is_string($path) || $this->sanitizeRelative($path) === '') throw new ValidationException('Invalid selected path.');
+                $path = $this->sanitizeRelative($path);
+                $src = $this->resolve($root, $path, true);
+                foreach ($seen as $other) {
+                    if ($src === $other || str_starts_with($src . '/', $other . '/') || str_starts_with($other . '/', $src . '/')) throw new ValidationException('Selection contains duplicate or overlapping paths.');
+                }
+                $seen[] = $src;
+                $this->inspectTree($src, $count, $bytes);
+                $name = basename($src);
+                if ($operation !== 'delete') {
+                    if ($dest === $src || str_starts_with($dest . '/', $src . '/')) throw new ValidationException('Destination cannot be inside a selected folder.');
+                    if (isset($names[$name])) throw new ValidationException('Selected items have conflicting names.');
+                    $names[$name] = true;
+                }
+                if ($operation === 'delete' && is_dir($src) && !$this->isDirectoryEmpty($src) && !($this->config['allow_recursive_delete'] ?? false)) throw new ValidationException('Recursive folder deletion is disabled.');
+                $to = $this->joinRelative($destPath, $name);
+                if (in_array($operation, ['copy', 'move'], true)) {
+                    $target = $this->resolve($destRoot, $to, false);
+                    if (file_exists($target) || is_link($target)) throw new ValidationException('Destination already exists: ' . $to);
+                }
+                $tasks[] = ['path' => $path, 'src' => $src, 'to' => $to, 'name' => $name];
+            }
+            if ($operation === 'zip') {
+                $this->assertArchiveAllowed('create');
+                $name = $this->sanitizeName((string) ($body['name'] ?? 'selection.zip'));
+                if (!str_ends_with(strtolower($name), '.zip')) $name .= '.zip';
+                $path = $this->joinRelative($destPath, $name);
+                $target = $this->resolve($destRoot, $path, false);
+                if (file_exists($target)) throw new ValidationException('Archive already exists.');
+                $zip = new ZipArchive();
+                if ($zip->open($target, ZipArchive::CREATE | ZipArchive::EXCL) !== true) throw new ValidationException('Cannot create archive.');
+                try {
+                    foreach ($tasks as $task) $this->addPathToZip($zip, $task['src'], $task['name']);
+                    if (!$zip->close()) throw new ValidationException('Cannot finish archive.');
+                } catch (\Throwable $error) { @unlink($target); throw $error; }
+                return ['message' => 'Selection archived.', 'path' => $path, 'root' => $destRoot, 'completed' => $paths, 'failed' => []];
+            }
+            $completed = []; $failed = [];
+            foreach ($tasks as $task) {
+                try {
+                    if ($operation === 'delete') $this->delete($root, $task['path']);
+                    else $this->$operation($root, $task['path'], $destRoot, $task['to']);
+                    $completed[] = $task['path'];
+                } catch (\Throwable $error) {
+                    $failed[] = ['path' => $task['path'], 'message' => $error->getMessage()];
+                    break;
+                }
+            }
+            return ['message' => count($completed) . ' of ' . count($tasks) . ' items completed.', 'completed' => $completed, 'failed' => $failed, 'pending' => array_slice($paths, count($completed) + count($failed))];
+        } finally { flock($lock, LOCK_UN); fclose($lock); }
     }
 
     public function mkdir(string $root, string $path, string $name): array
@@ -536,6 +728,8 @@ class FileService
         for ($i = 0; $i < $zip->numFiles; $i++) {
             $stat = $zip->statIndex($i);
             $entryName = (string) ($stat['name'] ?? '');
+            $this->assertZipEntryType($zip, $i);
+            if ($i >= $maxFiles) throw new ValidationException('ZIP entry limit exceeded.');
             $safe = $this->safeArchiveEntryName($entryName);
             if ($safe === null) {
                 $skipped++;
@@ -557,6 +751,8 @@ class FileService
             }
 
             if (!$isDir) {
+                $this->assertAllowedUpload($target);
+                $this->resolve($root, $this->relativeToRootBase($root, $target), false);
                 $totalBytes += (int) ($stat['size'] ?? 0);
                 if (count($tasks) + 1 > $maxFiles) {
                     $zip->close();
@@ -628,11 +824,14 @@ class FileService
     public function rename(string $root, string $path, string $name): array
     {
         $this->assertRootWritable($root);
-        $src = $this->resolve($root, $path, true);
+        $src = $this->operationSource($root, $path);
         $name = $this->sanitizeName($name);
         $dst = dirname($src) . '/' . $name;
         $this->assertInsideRoot($root, $dst);
-        if (file_exists($dst)) {
+        if ($dst === $src || str_starts_with($dst . '/', $src . '/')) {
+            throw new ValidationException('Destination cannot be inside the source.');
+        }
+        if (file_exists($dst) || is_link($dst)) {
             throw new ValidationException('Destination already exists.');
         }
         if ($this->autoBackup()) {
@@ -648,9 +847,12 @@ class FileService
     public function copy(string $root, string $path, string $destRoot, string $destPath): array
     {
         $this->assertRootWritable($destRoot);
-        $src = $this->resolve($root, $path, true);
+        $src = $this->operationSource($root, $path);
         $dst = $this->resolve($destRoot, $destPath, false);
-        if (file_exists($dst)) {
+        if ($dst === $src || str_starts_with($dst . '/', $src . '/')) {
+            throw new ValidationException('Destination cannot be inside the source.');
+        }
+        if (file_exists($dst) || is_link($dst)) {
             throw new ValidationException('Destination already exists.');
         }
         if ($this->autoBackup() && file_exists($dst)) {
@@ -664,9 +866,12 @@ class FileService
     {
         $this->assertRootWritable($root);
         $this->assertRootWritable($destRoot);
-        $src = $this->resolve($root, $path, true);
+        $src = $this->operationSource($root, $path);
         $dst = $this->resolve($destRoot, $destPath, false);
-        if (file_exists($dst)) {
+        if ($dst === $src || str_starts_with($dst . '/', $src . '/')) {
+            throw new ValidationException('Destination cannot be inside the source.');
+        }
+        if (file_exists($dst) || is_link($dst)) {
             throw new ValidationException('Destination already exists.');
         }
         if ($this->autoBackup()) {
@@ -683,7 +888,7 @@ class FileService
     public function delete(string $root, string $path): array
     {
         $this->assertRootWritable($root);
-        $abs = $this->resolve($root, $path, true);
+        $abs = $this->operationSource($root, $path);
         if ($this->autoBackup()) {
             $this->backupPath($root, $path, 'pre-delete');
         }
@@ -704,7 +909,7 @@ class FileService
 
         $meta = [
             'plugin' => 'grav-commander',
-            'version' => '0.3.14',
+            'version' => '0.4.0',
             'scope' => 'file',
             'reason' => $reason,
             'root' => $root,
@@ -743,7 +948,7 @@ class FileService
 
         $meta = [
             'plugin' => 'grav-commander',
-            'version' => '0.3.14',
+            'version' => '0.4.0',
             'scope' => 'site',
             'reason' => $reason,
             'profile' => $profileKey,
@@ -1011,7 +1216,10 @@ class FileService
 
     private function safeArchiveEntryName(string $name): ?string
     {
-        $name = str_replace("\0", '', str_replace('\\', '/', $name));
+        if (str_contains($name, "\0") || preg_match('#^(?:[/\\\\]|[A-Za-z]:)#', $name)) {
+            throw new ForbiddenException('ZIP contains an absolute or invalid path.');
+        }
+        $name = str_replace('\\', '/', $name);
         $name = preg_replace('#/+#', '/', $name) ?? $name;
         $name = ltrim($name, '/');
         $name = preg_replace('#^\./+#', '', $name) ?? $name;
@@ -1137,12 +1345,20 @@ class FileService
         $base = $this->rootBase($root);
         $relative = $this->sanitizeRelative($path);
         $target = $relative === '' ? $base : $base . '/' . $relative;
+        $probe = $base;
+        foreach (explode('/', $relative) as $component) {
+            if ($component === '') continue;
+            $probe .= '/' . $component;
+            if (is_link($probe) || (file_exists($probe) && !is_file($probe) && !is_dir($probe))) {
+                throw new ForbiddenException('Symlinks and special files are not supported.');
+            }
+        }
 
         if ($mustExist && !file_exists($target)) {
             throw new NotFoundException('Path not found.');
         }
 
-        $this->assertInsideBase($base, $target, $mustExist);
+        $this->assertInsideBase($base, $target, $mustExist || $relative === '');
         return realpath($target) ?: $target;
     }
 
@@ -1154,6 +1370,11 @@ class FileService
     private function assertInsideBase(string $base, string $target, bool $mustExist): void
     {
         $baseReal = realpath($base) ?: $base;
+        $probe = $target;
+        while ($probe !== $base && $probe !== dirname($probe)) {
+            if (is_link($probe)) throw new ForbiddenException('Symlink paths are not supported.');
+            $probe = dirname($probe);
+        }
         $check = $mustExist ? (realpath($target) ?: '') : (realpath(dirname($target)) ?: dirname($target));
         if ($check === '' || ($check !== $baseReal && !str_starts_with($check, $baseReal . '/'))) {
             throw new ForbiddenException('Resolved path escapes the configured root.');
@@ -1390,7 +1611,7 @@ class FileService
             '[REASON]' => $reasonSlug,
             '[ROOT]' => $rootSlug,
             '[PATH]' => $pathSlug,
-            '[VERSION]' => $this->safeFilenamePart('0.3.14', 'version'),
+            '[VERSION]' => $this->safeFilenamePart('0.4.0', 'version'),
             '[RANDOM]' => bin2hex(random_bytes(8)),
         ];
 
@@ -1465,6 +1686,9 @@ class FileService
 
     private function addPathToZip(ZipArchive $zip, string $abs, string $zipPath, bool $siteMode = false, ?array &$stats = null, ?string $profileKey = null): void
     {
+        if (is_link($abs) || (!is_dir($abs) && !is_file($abs))) {
+            throw new ForbiddenException('Symlinks and special files are not supported.');
+        }
         if ($siteMode) {
             $relative = preg_replace('#^site/?#', '', $zipPath) ?? '';
             if ($this->isExcludedFromSiteBackup($relative, $profileKey)) {
@@ -2054,6 +2278,9 @@ class FileService
 
     private function copyRecursive(string $src, string $dst): void
     {
+        if (is_link($src) || (!is_dir($src) && !is_file($src))) {
+            throw new ForbiddenException('Symlinks and special files are not supported.');
+        }
         if (is_dir($src)) {
             $this->ensureDirectory($dst);
             $entries = scandir($src) ?: [];
@@ -2073,6 +2300,9 @@ class FileService
 
     private function deletePath(string $abs): void
     {
+        if (is_link($abs) || (!is_dir($abs) && !is_file($abs))) {
+            throw new ForbiddenException('Symlinks and special files are not supported.');
+        }
         if (is_dir($abs)) {
             $entries = scandir($abs) ?: [];
             foreach ($entries as $entry) {

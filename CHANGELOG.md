@@ -1,5 +1,23 @@
 
 
+## 0.4.0 — 2026-10-06
+
+- Dual-pane workspace with independent roots, paths, breadcrumbs, history, filtering,
+  sorting, multi-selection and a responsive source/destination switch.
+- Coordinated bounded copy/move/delete/archive operations preflight every selected
+  item and destination; collisions never overwrite and partial I/O results are explicit.
+- New file creation, folder duplication, image preview, ZIP inspection, keyboard
+  selection/clipboard intent, and single-file desktop drop upload.
+- Pinned raw editor retains unsaved changes across pane navigation; guarded close,
+  reload, Save shortcut, YAML/JSON/frontmatter validation and revision checks on Save.
+- Grav page identities derive from physical page locations, with native editor links;
+  page media, plugin/theme packages and configuration receive contextual labels.
+- Hardened recursive operations against symlinks, special files, root mutations and
+  copying folders into themselves; archive inspection/extraction reject unsafe entries.
+- Fixed empty-root folder creation and empty-content saves; aligned internal versions
+  and Composer keywords. Existing backup/restore and optional Jarvis flows retained.
+
+
 ## 0.3.15 — 2026-10-05
 
 - Standardize ordinary Grav blueprint keywords for package search and shared repository Topics.
@@ -16,7 +34,7 @@
 - Make file selection keyboard accessible and label the root/path controls.
 
 - Use API 1.0.44 permission enforcement, including scoped API keys, inherited group grants, and API super authority. Legacy `admin.super` alone no longer grants API operations.
-# v0.3.12
+## 0.3.12
 ## 08/30/2026
 
 1. [](#new)
@@ -30,7 +48,7 @@
 3. [](#security)
     * Apply is actor/file/source/proposal/version bound, expires after 15 minutes, works once, and never writes the filesystem. The existing Save file action remains the only editor persistence path.
 
-# v0.3.11
+## 0.3.11
 ## 05/17/2026
 
 1. [](#new)
@@ -44,7 +62,7 @@
     * Fixed backup downloads in Admin2 by opening a non-API tokenized route instead of fetching full ZIP archives into JavaScript Blob memory.
     * Quoted the backup-path and archive-name help text so embedded colons remain valid YAML and cannot prevent Grav from loading the plugin blueprint.
 
-# v0.3.10
+## 0.3.10
 ## 05/16/2026
 
 1. [](#new)
@@ -56,7 +74,7 @@
     * Corrected the Admin2 page editor launch URL for Grav page Markdown files by targeting `/pages/edit/...` and stripping numeric folder prefixes.
     * Hardened Open/Edit Raw button handling so it behaves like double-clicking a file instead of risking route navigation.
 
-# v0.3.8
+## 0.3.8
 ## 05/16/2026
 
 1. [](#new)
@@ -69,7 +87,7 @@
     * Clarifies backup download status messaging for larger archives.
     * Bumped internal backup metadata and status version reporting to 0.3.8.
 
-# v0.3.6
+## 0.3.6
 ## 05/16/2026
 
 1. [](#new)
@@ -80,7 +98,7 @@
     * Made the Backup Storage card visually reflect writable and inside-root status.
     * Updated the default backup storage path to `../gcmdr_backups` for safer new installs where the host allows it.
 
-# v0.3.3
+## 0.3.3
 ## 05/16/2026
 
 1. [](#new)
@@ -91,7 +109,7 @@
     * Fixed backup profile and schedule save routes by adding route aliases used by the Admin2 component.
     * Allowed configured backup paths to live outside the Grav root, including absolute paths or relative paths such as `../grav-commander-backups`.
 
-# v0.3.2
+## 0.3.2
 ## 05/16/2026
 
 1. [](#new)

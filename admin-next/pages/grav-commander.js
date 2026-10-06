@@ -12,6 +12,7 @@ class GravCommanderPage extends HTMLElement {
       path: '',
       parent: '',
       items: [],
+      selection: [], anchor: null, filter: '', sort: 'name', reverse: false, history: [], historyIndex: -1,
       selected: null,
       file: null,
       backups: [],
@@ -47,15 +48,27 @@ class GravCommanderPage extends HTMLElement {
       jarvisMessage: '',
       jarvisError: '',
     };
+    this.activePane = 'left';
+    this.panes = { right: Object.fromEntries(this.paneKeys().map(key => [key, this.state[key]])) };
   }
 
   connectedCallback() {
+    this._beforeUnload = event => { if (this.isDirty() || this.state.busy) { event.preventDefault(); event.returnValue = ''; } };
+    window.addEventListener('beforeunload', this._beforeUnload);
+    this._routeGuard = event => {
+      const link = event.target.closest?.('a[href]');
+      if (this.isDirty() && link && link.href !== window.location.href && !window.confirm('Leave Commander and discard unsaved changes?')) { event.preventDefault(); event.stopImmediatePropagation(); }
+    };
+    document.addEventListener('click', this._routeGuard, true);
     this.setupThemeSync();
     this.render();
     this.loadRoots();
   }
 
   disconnectedCallback() {
+    window.removeEventListener('beforeunload', this._beforeUnload);
+    document.removeEventListener('click', this._routeGuard, true);
+    if (this.previewUrl) URL.revokeObjectURL(this.previewUrl);
     this._themeObserver?.disconnect();
     if (this._themeMedia && this._themeListener) {
       this._themeMedia.removeEventListener?.('change', this._themeListener);
@@ -213,6 +226,9 @@ class GravCommanderPage extends HTMLElement {
   }
 
   setState(patch) {
+    const focused = this.shadowRoot.activeElement;
+    const focusId = focused?.id;
+    const selection = typeof focused?.selectionStart === 'number' ? [focused.selectionStart, focused.selectionEnd, focused.scrollTop] : null;
     const shouldAutoClearNotice = (
       (Object.prototype.hasOwnProperty.call(patch, 'message') && patch.message)
       || (Object.prototype.hasOwnProperty.call(patch, 'error') && patch.error)
@@ -221,6 +237,10 @@ class GravCommanderPage extends HTMLElement {
 
     this.state = { ...this.state, ...patch };
     this.render();
+    if (focusId && !this.state.modal) {
+      const next = this.shadowRoot.querySelector('#' + focusId); next?.focus();
+      if (selection && next?.setSelectionRange) { next.setSelectionRange(selection[0], selection[1]); next.scrollTop = selection[2]; }
+    }
 
     if (shouldAutoClearNotice) {
       this.scheduleNoticeClear(Object.prototype.hasOwnProperty.call(patch, 'message') && patch.message ? 7000 : 12000);
@@ -242,6 +262,7 @@ class GravCommanderPage extends HTMLElement {
   }
 
   async guard(action, label = 'Working…') {
+    if (this.state.busy) return;
     this.setState({ busy: true, busyLabel: label, error: '', message: '' });
     try {
       await action();
@@ -256,6 +277,7 @@ class GravCommanderPage extends HTMLElement {
   }
 
   confirmModal({ title = 'Confirm action', message = '', okText = 'OK', cancelText = 'Cancel', danger = false } = {}) {
+    this.modalFocus = this.shadowRoot.activeElement?.id;
     return new Promise(resolve => {
       this.setState({
         modal: {
@@ -273,6 +295,7 @@ class GravCommanderPage extends HTMLElement {
   closeModal(value) {
     const resolver = this.state.modal?.resolve;
     this.setState({ modal: null });
+    if (this.modalFocus) this.shadowRoot.querySelector('#' + this.modalFocus)?.focus();
     if (typeof resolver === 'function') resolver(value);
   }
 
@@ -306,6 +329,8 @@ class GravCommanderPage extends HTMLElement {
         jarvisProvider,
       };
       await this.loadList(false);
+      this.state.history = [{ root: this.state.root, path: this.state.path }]; this.state.historyIndex = 0;
+      this.panes.right = { ...this.panes.right, root: first?.key || 'pages', items: [...this.state.items], selection: [], history: [{ root: first?.key || 'pages', path: '' }], historyIndex: 0 };
     } catch (err) {
       this.setState({ error: err.message || String(err), items: [] });
     } finally {
@@ -318,21 +343,18 @@ class GravCommanderPage extends HTMLElement {
   async loadList(render = true) {
     const { root, path } = this.state;
     const data = await this.api(`/grav-commander/list?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`);
-    const patch = { items: data.items || [], path: data.path || '', parent: data.parent || '', selected: null, file: null, jarvisProposal: null, jarvisError: '', jarvisMessage: '' };
-    if (render) this.setState(patch);
-    else this.state = { ...this.state, ...patch };
+    Object.assign(this.state, { items: data.items || [], path: data.path || '', parent: data.parent || '', selected: null, selection: [] });
+    if (render) this.render();
   }
 
-  async openDir(path) {
-    this.setState({ path });
-    await this.guard(() => this.loadList());
-  }
+  async openDir(path) { return this.navigatePane(this.activePane, this.state.root, path); }
 
-  async openFile(item) {
+  async openFile(item, root = this.state.root) {
+    if (!await this.discardEditor()) return;
     await this.guard(async () => {
-      const file = await this.api(`/grav-commander/read?root=${encodeURIComponent(this.state.root)}&path=${encodeURIComponent(item.path)}`);
-      this.setState({ selected: item, file, message: `Opened ${item.name}`, jarvisAction: 'explain', jarvisProposal: null, jarvisError: '', jarvisMessage: '' });
-    });
+      const file = await this.api(`/grav-commander/read?root=${encodeURIComponent(root)}&path=${encodeURIComponent(item.path)}`);
+      this.setState({ file: { ...file, savedContent: file.content }, message: `Opened ${item.name}`, jarvisAction: 'explain', jarvisProposal: null, jarvisError: '', jarvisMessage: '' });
+    }, 'Opening file…');
   }
 
   editorContent() {
@@ -402,7 +424,7 @@ class GravCommanderPage extends HTMLElement {
       const data = await this.api('/grav-commander/jarvis/proposals', {
         method: 'POST',
         body: JSON.stringify({
-          root: this.state.root,
+          root: file.root || this.state.root,
           path: file.path,
           content,
           action: this.state.jarvisAction,
@@ -437,7 +459,7 @@ class GravCommanderPage extends HTMLElement {
       const data = await this.api(`/grav-commander/jarvis/proposals/${encodeURIComponent(proposal.proposal_id)}/accept`, {
         method: 'POST',
         body: JSON.stringify({
-          root: this.state.root,
+          root: file.root || this.state.root,
           path: file.path,
           current_content: currentContent,
           proposed_content: proposal.output,
@@ -462,7 +484,7 @@ class GravCommanderPage extends HTMLElement {
       try {
         await this.api(`/grav-commander/jarvis/proposals/${encodeURIComponent(proposal.proposal_id)}/discard`, {
           method: 'POST',
-          body: JSON.stringify({ root: this.state.root, path: file.path }),
+          body: JSON.stringify({ root: file.root || this.state.root, path: file.path }),
         });
       } catch (_) {}
     }
@@ -496,18 +518,16 @@ class GravCommanderPage extends HTMLElement {
 
   async saveFile() {
     const file = this.state.file;
-    if (!file) return;
-    const textarea = this.shadowRoot.querySelector('#gc-editor');
-    const content = textarea ? textarea.value : file.content;
+    if (!file?.editable) return;
+    const content = this.editorContent();
     await this.guard(async () => {
-      const res = await this.api('/grav-commander/write', {
-        method: 'PATCH',
-        body: JSON.stringify({ root: this.state.root, path: file.path, content }),
+      const result = await this.api('/grav-commander/write', {
+        method: 'PATCH', body: JSON.stringify({ root: file.root, path: file.path, content, revision: file.revision }),
       });
-      this.setState({ file: { ...file, content }, message: res.message || 'Saved.' });
-      await this.loadList();
+      this.setState({ file: { ...file, content, savedContent: content, revision: result.revision }, message: result.message || 'Saved.' });
+      await this.refreshPanes();
       await this.tryLoadBackups(false);
-    });
+    }, 'Validating and saving file…');
   }
 
   async makeFolder() {
@@ -519,7 +539,7 @@ class GravCommanderPage extends HTMLElement {
         body: JSON.stringify({ root: this.state.root, path: this.state.path, name }),
       });
       this.setState({ message: res.message || 'Folder created.' });
-      await this.loadList();
+      await this.refreshPanes();
     });
   }
 
@@ -533,14 +553,15 @@ class GravCommanderPage extends HTMLElement {
         body: form,
       });
       this.setState({ message: res.message || 'Uploaded.' });
-      await this.loadList();
+      await this.refreshPanes();
       await this.tryLoadBackups(false);
     });
   }
 
   async renameSelected() {
-    const item = this.state.selected || this.state.file;
+    const item = this.state.selected;
     if (!item) return;
+    if (this.state.file?.root === this.state.root && (this.state.file.path === item.path || this.state.file.path.startsWith(item.path + '/')) && !await this.discardEditor()) return;
     const currentName = item.name || item.path.split('/').pop();
     const name = prompt('Rename to:', currentName);
     if (!name || name === currentName) return;
@@ -549,53 +570,15 @@ class GravCommanderPage extends HTMLElement {
         method: 'POST',
         body: JSON.stringify({ root: this.state.root, path: item.path, name }),
       });
-      this.setState({ message: res.message || 'Renamed.', file: null, selected: null });
-      await this.loadList();
+      this.setState({ message: res.message || 'Renamed.', selected: null });
+      await this.refreshPanes();
       await this.tryLoadBackups(false);
     });
   }
 
-  async copyOrMoveSelected(mode) {
-    const item = this.state.selected || this.state.file;
-    if (!item) return;
-    const destRoot = prompt('Destination root:', this.state.root);
-    if (!destRoot) return;
-    const defaultPath = `${this.state.path ? `${this.state.path}/` : ''}${item.name || item.path.split('/').pop()}`;
-    const destPath = prompt('Destination path:', defaultPath);
-    if (!destPath) return;
+  async copyOrMoveSelected(mode) { return this.operate(mode); }
 
-    await this.guard(async () => {
-      const res = await this.api(`/grav-commander/${mode}`, {
-        method: 'POST',
-        body: JSON.stringify({ root: this.state.root, path: item.path, dest_root: destRoot, dest_path: destPath }),
-      });
-      this.setState({ message: res.message || `${mode} complete.`, file: null, selected: null });
-      await this.loadList();
-      await this.tryLoadBackups(false);
-    });
-  }
-
-  async deleteSelected() {
-    const item = this.state.selected || this.state.file;
-    if (!item) return;
-    const label = item.path || item.name;
-    const ok = await this.confirmModal({
-      title: 'Delete selected item?',
-      message: `Delete ${label}? A safety backup will be created first if auto-backup is enabled.`,
-      okText: 'Delete',
-      danger: true,
-    });
-    if (!ok) return;
-    await this.guard(async () => {
-      const res = await this.api('/grav-commander/delete', {
-        method: 'DELETE',
-        body: JSON.stringify({ root: this.state.root, path: item.path }),
-      });
-      this.setState({ message: res.message || 'Deleted.', file: null, selected: null });
-      await this.loadList();
-      await this.tryLoadBackups(false);
-    });
-  }
+  async deleteSelected() { return this.operate('delete'); }
 
   async backupSelected() {
     const item = this.state.selected || this.state.file;
@@ -841,31 +824,20 @@ class GravCommanderPage extends HTMLElement {
     ].join('\n');
   }
 
-  isGravPageMarkdownPath(path) {
-    const lower = String(path || '').toLowerCase();
-    return this.state.root === 'pages' && /\.(md|markdown)$/.test(lower) && this.parentPath(path) !== '';
+  pageIdentity(path) {
+    if (this.state.file?.path === path && this.state.file.identity?.page_route) return this.state.file.identity;
+    return this.state.items.find(item => item.path === path)?.identity;
   }
 
-  gravPageRouteFromFilePath(path) {
-    const pagePath = this.parentPath(path);
-    return pagePath
-      .split('/')
-      .filter(Boolean)
-      .map(part => part.replace(/^\d+\./, ''))
-      .filter(Boolean)
-      .join('/');
-  }
-
+  isGravPageMarkdownPath(path) { return !!this.pageIdentity(path)?.page_route; }
+  gravPageRouteFromFilePath(path) { return this.pageIdentity(path)?.page_route || ''; }
   gravPageEditorUrl(path) {
     const route = this.gravPageRouteFromFilePath(path);
-    const encoded = route.split('/').filter(Boolean).map(part => encodeURIComponent(part)).join('/');
-    return `${this.adminBasePath()}/pages/edit/${encoded}`;
+    return `${this.adminBasePath()}/pages/edit/${route.split('/').map(encodeURIComponent).join('/')}`;
   }
-
-  openGravPageEditor(path) {
-    if (!path) return;
+  async openGravPageEditor(path) {
     const url = this.gravPageEditorUrl(path);
-    window.location.assign(url);
+    if (this.isGravPageMarkdownPath(path) && await this.discardEditor()) window.location.assign(url);
   }
 
   addScheduleRow() {
@@ -1014,7 +986,7 @@ class GravCommanderPage extends HTMLElement {
         body: JSON.stringify({ name, confirm: true }),
       });
       this.setState({ message: res.message || 'Restored.', file: null, selected: null });
-      await this.loadList();
+      await this.refreshPanes();
       await this.tryLoadBackups(false);
     });
   }
@@ -1098,13 +1070,7 @@ class GravCommanderPage extends HTMLElement {
     }, 'Saving backup storage path…');
   }
 
-  async openSelected() {
-    const item = this.state.selected || this.state.file;
-    if (!item || item.type === 'dir') return;
-    const path = item.path || this.state.file?.path || '';
-    if (!path) return;
-    await this.openFile({ ...item, path, name: item.name || path.split('/').pop() || path });
-  }
+  async openSelected() { return this.openItem(this.state.selected); }
 
   async downloadSelected() {
     const item = this.state.selected || this.state.file;
@@ -1136,23 +1102,7 @@ class GravCommanderPage extends HTMLElement {
     });
   }
 
-  async zipSelected() {
-    const item = this.state.selected || this.state.file;
-    if (!item) return;
-    const currentName = item.name || item.path?.split('/').pop() || 'archive';
-    const suggested = `${currentName.replace(/\.zip$/i, '')}-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '').slice(0, 14)}.zip`;
-    const name = prompt('ZIP filename to create next to the selected item. Leave blank for an automatic name:', suggested);
-    if (name === null) return;
-
-    await this.guard(async () => {
-      const res = await this.api('/grav-commander/archive/zip', {
-        method: 'POST',
-        body: JSON.stringify({ root: this.state.root, path: item.path, name }),
-      });
-      this.setState({ message: `${res.message || 'ZIP created.'} ${res.name || ''}`.trim(), file: null, selected: null });
-      await this.loadList();
-    });
-  }
+  async zipSelected() { return this.operate('zip'); }
 
   async extractSelected() {
     const item = this.state.selected || this.state.file;
@@ -1183,9 +1133,8 @@ class GravCommanderPage extends HTMLElement {
         method: 'POST',
         body: JSON.stringify({ root: this.state.root, path: item.path, dest_path: destPath, overwrite }),
       });
-      this.setState({ message: `${res.message || 'ZIP extracted.'} ${res.files || 0} files, ${res.dirs || 0} folders.`, file: null, selected: null });
-      this.state.path = res.path || this.state.path;
-      await this.loadList();
+      this.setState({ message: `${res.message || 'ZIP extracted.'} ${res.files || 0} files, ${res.dirs || 0} folders.`, selected: null });
+      await this.refreshPanes();
       await this.tryLoadBackups(false);
     });
   }
@@ -1207,7 +1156,8 @@ class GravCommanderPage extends HTMLElement {
     return adminIdx >= 0 ? path.slice(0, adminIdx + '/admin'.length) : '/admin';
   }
 
-  openPluginSettings() {
+  async openPluginSettings() {
+    if (!await this.discardEditor()) return;
     window.location.href = `${this.adminBasePath()}/plugins/grav-commander`;
   }
 
@@ -1305,7 +1255,317 @@ class GravCommanderPage extends HTMLElement {
     return `<div class="gc-storage-lines"><code>${path}</code>${state}${warning}<span class="gc-note">Resolved: <code>${absolute}</code></span>${suggestion}</div>`;
   }
 
+  paneKeys() { return ['root', 'path', 'parent', 'items', 'selected', 'selection', 'anchor', 'filter', 'sort', 'reverse', 'history', 'historyIndex']; }
+
+  pane(id) {
+    return id === this.activePane ? this.state : this.panes[id];
+  }
+
+  activatePane(id, render = true) {
+    if (this.state.busy || this.state.modal) return;
+    if (id !== this.activePane) {
+      this.panes[this.activePane] = Object.fromEntries(this.paneKeys().map(key => [key, this.state[key]]));
+      Object.assign(this.state, this.panes[id]);
+      this.activePane = id;
+    }
+    if (render) this.render();
+  }
+
+  visibleItems(pane = this.state) {
+    const filter = (pane.filter || '').toLocaleLowerCase();
+    return pane.items.filter(item => item.name.toLocaleLowerCase().includes(filter)).sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+      const key = pane.sort || 'name';
+      const value = key === 'name' ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) : (a[key] || 0) - (b[key] || 0);
+      return pane.reverse ? -value : value;
+    });
+  }
+
+  selectedItems() { return this.state.items.filter(item => (this.state.selection || []).includes(item.path)); }
+
+  selectItem(id, path, event = {}) {
+    this.activatePane(id, false);
+    const visible = this.visibleItems();
+    let selection = new Set(this.state.selection || []);
+    if (event.shiftKey && this.state.anchor && visible.some(item => item.path === this.state.anchor)) {
+      const start = visible.findIndex(item => item.path === this.state.anchor);
+      const end = visible.findIndex(item => item.path === path);
+      if (!event.ctrlKey && !event.metaKey) selection.clear();
+      visible.slice(Math.min(start, end), Math.max(start, end) + 1).forEach(item => selection.add(item.path));
+    } else {
+      if (event.ctrlKey || event.metaKey) selection.has(path) ? selection.delete(path) : selection.add(path);
+      else selection = new Set([path]);
+      this.state.anchor = path;
+    }
+    this.state.selection = [...selection];
+    this.state.selected = selection.size === 1 ? this.state.items.find(item => selection.has(item.path)) : null;
+    this.render();
+    this.focusRow(id, path);
+  }
+
+  focusRow(id, path) {
+    const rows = this.shadowRoot.querySelectorAll(`[data-pane="${id}"] [data-entry]`);
+    [...rows].find(row => row.dataset.entry === path)?.querySelector('button')?.focus();
+  }
+
+  async navigatePane(id, root, path, historyIndex = null) {
+    if (this.state.busy) return;
+    await this.guard(async () => {
+      const data = await this.api(`/grav-commander/list?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`);
+      const pane = this.pane(id);
+      if (historyIndex === null) {
+        pane.history = (pane.history || []).slice(0, (pane.historyIndex ?? -1) + 1);
+        const last = pane.history.at(-1);
+        if (!last || last.root !== root || last.path !== data.path) pane.history.push({ root, path: data.path });
+        pane.history = pane.history.slice(-50);
+        pane.historyIndex = pane.history.length - 1;
+      } else pane.historyIndex = historyIndex;
+      Object.assign(pane, { root, path: data.path, parent: data.parent, items: data.items || [], selected: null, selection: [], anchor: null, filter: '' });
+      this.render();
+    }, 'Loading folder…');
+  }
+
+  async refreshPanes() {
+    const snapshots = ['left', 'right'].map(id => ({ id, root: this.pane(id).root, path: this.pane(id).path }));
+    await Promise.all(snapshots.map(async ({ id, root, path }) => {
+      const data = await this.api(`/grav-commander/list?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`);
+      Object.assign(this.pane(id), { items: data.items || [], selected: null, selection: [] });
+    }));
+    this.render();
+  }
+
+  isDirty() { return !!this.state.file && this.state.file.content !== this.state.file.savedContent; }
+
+  async discardEditor() {
+    if (this.state.jarvisBusy) return false;
+    if (this.isDirty() && !await this.confirmModal({ title: 'Discard unsaved changes?', message: `Unsaved changes in ${this.state.file.path} will be discarded.`, okText: 'Discard changes', danger: true })) return false;
+    if (this.previewUrl) URL.revokeObjectURL(this.previewUrl);
+    this.previewUrl = null;
+    this.setState({ file: null, jarvisProposal: null });
+    return true;
+  }
+
+  async operate(operation, source = null, destination = null) {
+    if (this.state.busy) return;
+    const paths = source?.paths || this.selectedItems().map(item => item.path);
+    const root = source?.root || this.state.root;
+    const dest = destination || this.pane(this.activePane === 'left' ? 'right' : 'left');
+    if (!paths.length) return;
+    if (['move', 'delete'].includes(operation) && this.state.file?.root === root && paths.some(path => this.state.file.path === path || this.state.file.path.startsWith(path + '/'))) {
+      if (!await this.discardEditor()) return;
+    }
+    const body = { operation, root, paths, dest_root: dest.root, dest_path: dest.path };
+    if (operation === 'zip') {
+      const name = prompt('Archive filename (created in the active folder):', 'selection.zip');
+      if (!name) return;
+      Object.assign(body, { name, dest_root: root, dest_path: this.state.path });
+    }
+    const target = operation === 'delete' ? '' : `\nTo ${body.dest_root}:/${body.dest_path || ''}`;
+    const message = `${operation.toUpperCase()} ${paths.length} item(s)\nFrom ${root}:/\n${paths.slice(0, 12).join('\n')}${paths.length > 12 ? '\n…' : ''}${target}\n\nFolders include all contents and associated media. Existing destinations are never replaced.`;
+    if (!await this.confirmModal({ title: `${operation[0].toUpperCase() + operation.slice(1)} selection?`, message, okText: operation === 'delete' ? 'Delete selection' : 'Continue', danger: ['move', 'delete'].includes(operation) })) return;
+    await this.guard(async () => {
+      const result = await this.api('/grav-commander/operations', { method: 'POST', body: JSON.stringify(body) });
+      this.setState({ message: result.message, error: result.failed?.length ? `Stopped at ${result.failed[0].path}: ${result.failed[0].message}. ${result.pending?.length || 0} items were not attempted.` : '' });
+      if (source && !result.failed?.length && operation === 'move') this.clipboard = null;
+      await this.refreshPanes();
+      await this.tryLoadBackups(false);
+    }, `${operation[0].toUpperCase() + operation.slice(1)}: ${paths.length} item(s)… Keep this workspace open until the result appears.`);
+  }
+
+  async duplicateSelected() {
+    const item = this.state.selected;
+    if (!item) return;
+    const name = prompt('Name for the duplicate (folders include their media):', item.name + '-copy');
+    if (!name || /[/\\]/.test(name)) return;
+    await this.guard(async () => {
+      const result = await this.api('/grav-commander/copy', { method: 'POST', body: JSON.stringify({ root: this.state.root, path: item.path, dest_root: this.state.root, dest_path: [this.state.path, name].filter(Boolean).join('/') }) });
+      await this.refreshPanes();
+      this.setState({ message: result.message });
+    }, 'Duplicating selection…');
+  }
+
+  async createFile() {
+    const name = prompt('New text filename (for example draft.md or settings.yaml):');
+    if (!name) return;
+    await this.guard(async () => {
+      const result = await this.api('/grav-commander/create', { method: 'POST', body: JSON.stringify({ root: this.state.root, path: this.state.path, name }) });
+      await this.refreshPanes();
+      this.setState({ message: result.message });
+    }, 'Creating file…');
+  }
+
+  async validateEditor() {
+    const file = this.state.file;
+    if (!file?.editable) return;
+    await this.guard(async () => {
+      const result = await this.api('/grav-commander/validate', { method: 'POST', body: JSON.stringify({ path: file.path, content: this.editorContent() }) });
+      this.setState({ message: result.message });
+    }, 'Validating document…');
+  }
+
+  async previewSelected() {
+    const item = this.state.selected;
+    if (!item || !await this.discardEditor()) return;
+    if (item.viewable) return this.openFile(item);
+    await this.guard(async () => {
+      if (item.archive) {
+        const result = await this.api(`/grav-commander/archive/inspect?root=${encodeURIComponent(this.state.root)}&path=${encodeURIComponent(item.path)}`);
+        this.setState({ file: { ...item, root: this.state.root, preview: 'archive', entries: result.entries, content: '', savedContent: '' } });
+      } else if (/\.(png|jpe?g|gif|webp|avif)$/i.test(item.name)) {
+        if (item.size > 10485760) throw new Error('Image exceeds the 10 MB preview limit. Download it instead.');
+        const response = await fetch(this.apiUrl(`/grav-commander/download?root=${encodeURIComponent(this.state.root)}&path=${encodeURIComponent(item.path)}`), { headers: this.getAuthHeaders(false), credentials: 'omit', cache: 'no-store' });
+        if (!response.ok) throw new Error('Image preview could not be loaded.');
+        const blob = await response.blob();
+        if (!/^image\/(png|jpeg|gif|webp|avif)$/.test(blob.type)) throw new Error('Unsupported image content.');
+        this.previewUrl = URL.createObjectURL(blob);
+        this.setState({ file: { ...item, root: this.state.root, preview: 'image', content: '', savedContent: '' } });
+      }
+    }, item.archive ? 'Inspecting archive…' : 'Loading image…');
+  }
+
+  paneHtml(id) {
+    const pane = this.pane(id), active = id === this.activePane, items = this.visibleItems(pane);
+    const e = value => this.escape(value);
+    const suffix = active ? '' : '-other';
+    const parts = pane.path.split('/').filter(Boolean);
+    const breadcrumbs = [{ label: pane.root, path: '' }, ...parts.map((part, index) => ({ label: part, path: parts.slice(0, index + 1).join('/') }))];
+    return `<section class="gc-card gc-pane ${active ? 'active' : ''}" data-pane="${id}" aria-label="${id} file pane">
+      <div class="gc-head"><button data-activate="${id}" aria-pressed="${active}">${id === 'left' ? 'Left' : 'Right'} · ${active ? 'Source (active)' : 'Destination'}</button><span class="gc-muted-small">${pane.selection?.length || 0} selected / ${pane.items.length}</span></div>
+      <div class="gc-pane-nav">
+        <select aria-label="${id} root" data-root id="gc-root${suffix}">${this.state.roots.map(root => `<option value="${e(root.key)}" ${root.key === pane.root ? 'selected' : ''}>${e(root.label)}${root.writable ? '' : ' (read-only)'}</option>`).join('')}</select>
+        <div class="gc-tools"><button data-history="-1" aria-label="${id} back" ${pane.historyIndex > 0 ? '' : 'disabled'}>←</button><button data-history="1" aria-label="${id} forward" ${pane.historyIndex < pane.history.length - 1 ? '' : 'disabled'}>→</button><button data-up ${pane.path ? '' : 'disabled'}>Up</button><button data-refresh>Refresh</button></div>
+        <nav class="gc-crumbs" aria-label="${id} breadcrumbs">${breadcrumbs.map(crumb => `<button data-crumb="${e(crumb.path)}">${e(crumb.label)}</button>`).join('<span>/</span>')}</nav>
+        <div class="gc-path-row"><input type="text" data-path id="gc-path${suffix}" aria-label="${id} folder path" value="${e(pane.path)}" placeholder="Folder path"><button data-go id="gc-go${suffix}">Go</button></div>
+        <div class="gc-path-row"><input type="text" data-filter aria-label="${id} filename filter" value="${e(pane.filter)}" placeholder="Filter this folder…"><select data-sort aria-label="${id} sort">${['name','size','modified'].map(key => `<option ${pane.sort === key ? 'selected' : ''}>${key}</option>`).join('')}</select><button data-reverse aria-label="${id} reverse sort">${pane.reverse ? '↓' : '↑'}</button></div>
+      </div>
+      <div class="gc-table-wrap" tabindex="0" role="region" aria-label="${id} directory listing"><table aria-label="${id} files"><thead><tr><th>Name</th><th>Size</th><th>Modified</th></tr></thead><tbody>${items.map(item => `<tr data-entry="${e(item.path)}" class="${pane.selection?.includes(item.path) ? 'selected' : ''}" aria-selected="${!!pane.selection?.includes(item.path)}"><td><input type="checkbox" data-toggle aria-label="Toggle ${e(item.name)}" ${pane.selection?.includes(item.path) ? 'checked' : ''}><button class="gc-file-entry gc-name" aria-label="Select ${e(item.name)}"><span aria-hidden="true">${pane.selection?.includes(item.path) ? '✓' : this.iconFor(item)}</span>${e(item.name)}</button><small>${e(item.identity?.kind || (item.type === 'dir' ? 'Folder' : item.extension))}</small></td><td>${e(this.formatSize(item.size))}</td><td>${e(this.formatDate(item.modified))}</td></tr>`).join('')}</tbody></table>${items.length ? '' : '<div class="gc-empty">No matching items.</div>'}</div>
+      <div class="gc-pane-footer"><button data-select-all>Select all visible</button><button data-clear>Clear</button><span class="gc-muted-small">${items.length} visible</span></div>
+    </section>`;
+  }
+
+  workspaceActionsHtml(contextual = false) {
+    const selection = this.selectedItems(), item = selection.length === 1 ? selection[0] : null;
+    const writable = this.state.roots.find(root => root.key === this.state.root)?.writable;
+    const destination = this.pane(this.activePane === 'left' ? 'right' : 'left');
+    const destWritable = this.state.roots.find(root => root.key === destination.root)?.writable;
+    const button = (id, label, enabled = true, danger = false) => `<button id="gc-${id}" ${enabled ? '' : 'disabled'} ${danger ? 'class="danger"' : ''}>${label}</button>`;
+    if (contextual) return item ? `<section class="gc-card"><div class="gc-pane-footer">${item ? `${button('open', item.type === 'dir' ? 'Open folder' : item.editable ? 'Edit Raw' : 'View', item.type === 'dir' || item.viewable)}${item.identity?.page_route ? button('open-grav-editor', 'Open in Grav Editor') : ''}${item.archive || /\.(png|jpe?g|gif|webp|avif)$/i.test(item.name) ? button('preview', item.archive ? 'Inspect archive' : 'Preview image') : ''}${item.extractable && writable ? button('extract', 'Extract ZIP') : ''}${button('rename', 'Rename', writable)}${button('duplicate', 'Duplicate', writable)}${item.type !== 'dir' ? button('download', 'Download') : ''}${button('backup-file', 'Backup item')}` : ''}</div>${item ? `<div class="gc-footer-note">${this.escape(item.identity?.kind || item.type)} · ${this.escape(item.path)} · ${this.escape(this.formatSize(item.size))} · ${this.escape(this.formatDate(item.modified))}${/package/.test(item.identity?.kind || '') ? ' · Moving package files may affect the installed extension.' : ''}</div>` : ''}</section>` : '';
+    return `<section class="gc-card"><div class="gc-head"><div class="gc-title"><strong>${this.escape(this.state.root)}:/${this.escape(this.state.path)} → ${this.escape(destination.root)}:/${this.escape(destination.path)}</strong><p>${selection.length} selected · click, Cmd/Ctrl-click or Shift-click · F6 changes pane</p></div><div class="gc-tools">${button('switch-pane', 'Switch pane')}<button id="gc-swap">Swap locations</button></div></div><div class="gc-pane-footer">
+      ${button('new-file', 'New file', writable)}${button('new-folder', 'New folder', writable)}${button('upload-button', 'Upload', writable)}<input id="gc-upload" class="gc-hidden" type="file">
+      ${button('copy', 'Copy →', selection.length && destWritable)}${button('move', 'Move →', selection.length && writable && destWritable)}${button('delete', 'Delete', selection.length && writable, true)}${button('zip', 'Archive selection', selection.length && writable)}
+
+    </div></section>`;
+  }
+
+  bindWorkspace() {
+    const q = selector => this.shadowRoot.querySelector(selector);
+    q('#gc-switch-pane')?.addEventListener('click', () => this.activatePane(this.activePane === 'left' ? 'right' : 'left'));
+    q('#gc-swap')?.addEventListener('click', () => {
+      this.activatePane(this.activePane, false);
+      const other = this.activePane === 'left' ? 'right' : 'left';
+      const current = Object.fromEntries(this.paneKeys().map(key => [key, this.state[key]]));
+      Object.assign(this.state, this.panes[other]); this.panes[other] = current; this.render();
+    });
+    q('#gc-new-file')?.addEventListener('click', () => this.createFile());
+    q('#gc-upload-button')?.addEventListener('click', () => q('#gc-upload')?.click());
+    q('#gc-duplicate')?.addEventListener('click', () => this.duplicateSelected());
+    q('#gc-preview')?.addEventListener('click', () => this.previewSelected());
+    q('#gc-editor-close')?.addEventListener('click', () => this.discardEditor());
+    q('#gc-editor-reload')?.addEventListener('click', async () => {
+      const file = this.state.file;
+      if (await this.discardEditor()) await this.openFile(file, file.root);
+    });
+    q('#gc-validate')?.addEventListener('click', () => this.validateEditor());
+    this.shadowRoot.querySelectorAll('[data-pane]').forEach(element => {
+      const id = element.dataset.pane;
+      element.querySelector('[data-activate]').addEventListener('click', () => this.activatePane(id));
+      const navigate = (root, path, index = null) => this.navigatePane(id, root, path, index);
+      element.querySelector('[data-root]').addEventListener('change', event => navigate(event.target.value, ''));
+      element.querySelector('[data-go]').addEventListener('click', () => navigate(this.pane(id).root, element.querySelector('[data-path]').value));
+      element.querySelector('[data-path]').addEventListener('keydown', event => { if (event.key === 'Enter') element.querySelector('[data-go]').click(); });
+      element.querySelector('[data-up]').addEventListener('click', () => navigate(this.pane(id).root, this.pane(id).parent));
+      element.querySelector('[data-refresh]').addEventListener('click', () => navigate(this.pane(id).root, this.pane(id).path));
+      element.querySelectorAll('[data-history]').forEach(button => button.addEventListener('click', () => {
+        const pane = this.pane(id), index = pane.historyIndex + Number(button.dataset.history), next = pane.history[index];
+        if (next) navigate(next.root, next.path, index);
+      }));
+      element.querySelectorAll('[data-crumb]').forEach(button => button.addEventListener('click', () => navigate(this.pane(id).root, button.dataset.crumb)));
+      element.querySelector('[data-filter]').addEventListener('input', event => {
+        const pane = this.pane(id); pane.filter = event.target.value;
+        pane.selection = []; pane.selected = null; pane.anchor = null;
+        this.render(); const input = this.shadowRoot.querySelector(`[data-pane="${id}"] [data-filter]`); input.focus(); input.setSelectionRange(input.value.length, input.value.length);
+      });
+      element.querySelector('[data-sort]').addEventListener('change', event => { this.pane(id).sort = event.target.value; this.render(); });
+      element.querySelector('[data-reverse]').addEventListener('click', () => { this.pane(id).reverse = !this.pane(id).reverse; this.render(); });
+      element.querySelector('[data-select-all]').addEventListener('click', () => { this.activatePane(id, false); this.state.selection = this.visibleItems().map(item => item.path); this.state.selected = this.state.selection.length === 1 ? this.visibleItems()[0] : null; this.render(); });
+      element.querySelector('[data-clear]').addEventListener('click', () => { this.activatePane(id, false); this.state.selection = []; this.state.selected = null; this.render(); });
+      element.querySelectorAll('[data-entry]').forEach(row => {
+        row.addEventListener('click', event => this.selectItem(id, row.dataset.entry, event.target.matches('[data-toggle]') ? { ctrlKey: true } : event));
+        row.addEventListener('dblclick', () => { this.activatePane(id, false); this.openItem(this.state.items.find(item => item.path === row.dataset.entry)); });
+      });
+      element.addEventListener('dragover', event => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } });
+      element.addEventListener('drop', event => {
+        if (!event.dataTransfer.files.length) return;
+        event.preventDefault();
+        if (this.state.busy) return;
+        this.activatePane(id);
+        if (event.dataTransfer.files.length !== 1) return this.setState({ error: 'Drop one file at a time. Each upload reports its own result.' });
+        this.uploadFile(event.dataTransfer.files[0]);
+      });
+      element.addEventListener('keydown', event => this.paneKeydown(event, id));
+    });
+    this.shadowRoot.removeEventListener?.('keydown', this._workspaceKeydown);
+    this._workspaceKeydown = event => {
+      if (this.state.modal) {
+        if (event.key === 'Escape') { event.preventDefault(); this.closeModal(false); }
+        if (event.key === 'Tab') {
+          const buttons = [...this.shadowRoot.querySelectorAll('.gc-modal button')];
+          if (buttons.length) { event.preventDefault(); buttons[(buttons.indexOf(this.shadowRoot.activeElement) + (event.shiftKey ? buttons.length - 1 : 1)) % buttons.length].focus(); }
+        }
+        return;
+      }
+      if (this.state.busy) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's' && this.state.file?.editable) { event.preventDefault(); this.saveFile(); }
+      if (event.key === 'F6') { event.preventDefault(); this.activatePane(this.activePane === 'left' ? 'right' : 'left'); this.shadowRoot.querySelector(`[data-pane="${this.activePane}"] .gc-table-wrap`)?.focus(); }
+      if (event.key === 'Escape' && this.state.file) { event.preventDefault(); this.discardEditor(); }
+    };
+    this.shadowRoot.addEventListener?.('keydown', this._workspaceKeydown);
+    if (this.state.modal) (q('#gc-modal-cancel') || q('#gc-modal-ok'))?.focus();
+  }
+
+  openItem(item) {
+    if (!item) return;
+    if (item.type === 'dir') return this.openDir(item.path);
+    if (item.viewable) return this.openFile(item);
+    if (item.archive || /\.(png|jpe?g|gif|webp|avif)$/i.test(item.name)) return this.previewSelected();
+  }
+
+  paneKeydown(event, id) {
+    if (this.state.busy || this.state.modal || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) return;
+    const key = event.key.toLowerCase(), mod = event.metaKey || event.ctrlKey;
+    const handled = ['arrowdown','arrowup','enter','backspace','delete','f2','escape'].includes(key) || (mod && ['a','c','x','v'].includes(key));
+    if (!handled) return;
+    event.preventDefault(); this.activatePane(id, false);
+    const items = this.visibleItems();
+    if (mod && key === 'a') { this.state.selection = items.map(item => item.path); this.state.selected = items.length === 1 ? items[0] : null; this.render(); }
+    else if (mod && ['c','x'].includes(key)) { this.clipboard = { root: this.state.root, paths: [...this.state.selection], operation: key === 'c' ? 'copy' : 'move' }; this.setState({ message: `${this.clipboard.paths.length} items ready to ${this.clipboard.operation}. Navigate to a destination and paste.` }); }
+    else if (mod && key === 'v' && this.clipboard) this.operate(this.clipboard.operation, this.clipboard, this.state);
+    else if (key === 'enter') this.openItem(this.state.selected);
+    else if (key === 'backspace') this.openDir(this.state.parent);
+    else if (key === 'delete') this.operate('delete');
+    else if (key === 'f2' && this.state.selected) this.renameSelected();
+    else if (key === 'escape') { this.state.selection = []; this.state.selected = null; this.render(); }
+    else if (key.startsWith('arrow') && items.length) {
+      const path = event.target.closest('[data-entry]')?.dataset.entry;
+      const index = items.findIndex(item => item.path === path);
+      const next = items[Math.max(0, Math.min(items.length - 1, index + (key === 'arrowdown' ? 1 : -1)))];
+      this.selectItem(id, next.path, event);
+    }
+    if (['a', 'c', 'x', 'escape'].includes(key)) this.shadowRoot.querySelector(`[data-pane="${id}"] .gc-table-wrap`)?.focus();
+  }
+
   render() {
+    const scrolls = [...this.shadowRoot.querySelectorAll('[data-pane]')].map(el => [el.dataset.pane, el.querySelector('.gc-table-wrap')?.scrollTop || 0]);
     const { roots, root, path, parent, items, selected, file, backups, busy, busyLabel, message, error, backupError, status, activeTab, backupProfile, backupNote, showProfileEditor, profileExpert, profileRows, profileDraft, profileDraftError, scheduleRows, scheduleDraftError, profileExpanded, scheduleExpanded, theme, modal, jarvisStatus, jarvisProvider, jarvisModels, jarvisModel, jarvisAction, jarvisCustomInstruction, jarvisProposal, jarvisBusy, jarvisMessage, jarvisError } = this.state;
     const currentRoot = roots.find(r => r.key === root);
     const profiles = status?.profiles || {};
@@ -1485,6 +1745,36 @@ class GravCommanderPage extends HTMLElement {
         .gc-file-entry { border:0; background:transparent; box-shadow:none; padding:0; font:inherit; color:inherit; text-align:left; }
         button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline:3px solid color-mix(in srgb, var(--gc-primary) 55%, transparent); outline-offset:2px; }
         @media (max-width: 1100px) { .gc-shell { padding-left:8px; padding-right:8px; } .gc-main { grid-template-columns:1fr; } input[type="text"] { min-width:180px; } .gc-profile-row, .gc-schedule-row, .gc-jarvis-controls, .gc-jarvis-diff { grid-template-columns:1fr; } .gc-repeat-head { align-items:flex-start; flex-direction:column; } }
+
+        .gc-workspace { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; }
+        .gc-pane { min-width:0; border-top:3px solid var(--gc-border); }
+        .gc-pane.active { border-top-color:var(--gc-primary); }
+        .gc-pane .gc-head { padding:10px; }
+        .gc-pane-nav { padding:10px; display:grid; gap:8px; }
+        .gc-path-row { display:flex; gap:6px; min-width:0; }
+        .gc-path-row input[type="text"] { min-width:0; width:100%; }
+        .gc-path-row select { max-width:100px; }
+        .gc-crumbs { display:flex; gap:4px; align-items:center; overflow:auto; }
+        .gc-crumbs button { padding:3px 6px; border:0; border-radius:4px; white-space:nowrap; }
+        .gc-pane-footer { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:12px; }
+        .gc-pane .gc-table-wrap { height:350px; max-height:50vh; border-block:1px solid var(--gc-border); }
+        .gc-pane td:first-child { max-width:260px; }
+        .gc-pane [data-toggle] { margin-right:8px; accent-color:var(--gc-primary); }
+        .gc-pane .gc-name { display:inline-flex; }
+        .gc-pane small { display:block; color:var(--gc-muted); padding-top:3px; }
+        .gc-pane .gc-file-entry { max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+        .gc-pane tr.selected { box-shadow:inset 3px 0 var(--gc-primary); }
+        .gc-pane td { padding:9px 10px; }
+        .gc-image-preview { max-width:100%; max-height:500px; object-fit:contain; }
+        .gc-archive-preview { max-height:420px; overflow:auto; overflow-wrap:anywhere; }
+        .gc-title p, .gc-title strong, .gc-footer-note { overflow-wrap:anywhere; }
+        .gc-shell { min-width:0; }
+        .gc-editor-card { min-width:0; }
+        .gc-editor-card textarea { tab-size:2; }
+        .gc-table-wrap:focus-visible { outline:3px solid var(--gc-primary); outline-offset:-3px; }
+        @media (max-width: 850px) { .gc-workspace { grid-template-columns:minmax(0,1fr); } .gc-pane:not(.active) { display:none; } .gc-shell { padding-inline:0; } .gc-pane .gc-table-wrap { height:320px; } }
+        @media (max-width: 600px) { .gc-pane th:nth-child(3), .gc-pane td:nth-child(3) { display:none; } }
+        @media (prefers-reduced-motion: reduce) { .gc-spinner { animation:none; } }
       </style>
 
       <div class="gc-shell" data-theme="${this.escape(theme)}">
@@ -1492,7 +1782,7 @@ class GravCommanderPage extends HTMLElement {
           <div class="gc-head">
             <div class="gc-title">
               <h2>🗂️ Grav Commander</h2>
-              <p>Norton Commander-ish file wrangling for Admin2, with backup parachutes.</p>
+              <p>0.4.0 · Grav-native file and site operations</p>
             </div>
             <div class="gc-tools">
               <button id="gc-settings" title="Open Grav Commander plugin settings">Settings</button>
@@ -1502,78 +1792,26 @@ class GravCommanderPage extends HTMLElement {
             <button id="gc-tab-files" class="gc-tab ${activeTab === 'files' ? 'active' : ''}" type="button">Files</button>
             <button id="gc-tab-backups" class="gc-tab ${activeTab === 'backups' ? 'active' : ''}" type="button">Backups</button>
           </div>
-          ${hasNotice ? `<div class="gc-status">
+          ${hasNotice ? `<div class="gc-status" role="status" aria-live="polite">
             ${message ? `<span class="gc-msg">${this.escape(message)}</span>` : ''}
             ${error ? `<span class="gc-err">${this.escape(error)}</span>` : ''}
           </div>` : ''}
         </section>
 
         ${activeTab === 'files' ? `
-        <section class="gc-card">
-          <div class="gc-head">
-            <div class="gc-title"><h2>File Browser</h2><p>Root: <strong>${this.escape(currentRoot?.label || root)}</strong> / ${this.escape(path || '')}</p></div>
-            <div class="gc-tools">
-              <select aria-label="File root" id="gc-root" ${roots.length ? '' : 'disabled'}>
-                ${roots.length ? roots.map(r => `<option value="${this.escape(r.key)}" ${r.key === root ? 'selected' : ''}>${this.escape(r.label)}${r.writable ? '' : ' (read-only)'}</option>`).join('') : '<option>No roots loaded</option>'}
-              </select>
-              <input aria-label="Folder path" id="gc-path" type="text" value="${this.escape(path)}" placeholder="folder/path" />
-              <button id="gc-go">Go</button>
-              <button id="gc-up" ${path ? '' : 'disabled'}>Up</button>
-              <button id="gc-refresh">Refresh</button>
-            </div>
-          </div>
-        </section>
-
-        <div class="gc-main">
-          <section class="gc-card">
-            <div class="gc-head">
-              <div class="gc-title"><h2>Files</h2><p>${items.length} item${items.length === 1 ? '' : 's'}</p></div>
-              <div class="gc-tools">
-                <button id="gc-new-folder">New folder</button>
-                <label class="gc-upload-label">Upload<input id="gc-upload" class="gc-hidden" type="file" /></label>
-              </div>
-            </div>
-            <div class="gc-table-wrap">
-              <table>
-                <thead><tr><th>Name</th><th>Size</th><th>Modified</th><th>Mode</th></tr></thead>
-                <tbody>
-                  ${items.map((item, idx) => `
-                    <tr data-idx="${idx}" class="${selected?.path === item.path ? 'selected' : ''}">
-                      <td><button type="button" class="gc-file-entry gc-name" title="Space to select; Enter to open" aria-label="Select ${this.escape(item.name)}"><span aria-hidden="true">${this.iconFor(item)}</span>${this.escape(item.name)}</button></td>
-                      <td>${this.escape(this.formatSize(item.size))}</td>
-                      <td>${this.escape(this.formatDate(item.modified))}</td>
-                      <td>${item.type === 'dir' ? 'folder' : (item.editable ? 'editable' : (item.viewable ? 'view/read-only' : 'binary/read-only'))}</td>
-                    </tr>`).join('')}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section class="gc-card">
-            <div class="gc-head">
-              <div class="gc-title"><h2>Editor / Actions</h2><p>${file ? this.escape(file.path) : selected ? this.escape(selected.path) : 'Select a file or folder'}</p></div>
-              <div class="gc-tools">
-                ${this.isGravPageMarkdownPath((selected || file)?.path || '') ? '<button type="button" id="gc-open-grav-editor">Open in Grav Editor</button>' : ''}
-                <button type="button" id="gc-open" ${((selected && selected.type !== 'dir') || file) ? '' : 'disabled'}>${(selected?.editable || file?.editable) ? 'Open/Edit Raw' : 'View'}</button>
-                <button id="gc-download" ${((selected && selected.type !== 'dir') || file) ? '' : 'disabled'}>Download</button>
-                <button id="gc-zip" ${canZip ? '' : 'disabled'}>Zip</button>
-                <button id="gc-extract" ${canExtract ? '' : 'disabled'}>Extract ZIP</button>
-                <button id="gc-rename" ${selected || file ? '' : 'disabled'}>Rename</button>
-                <button id="gc-copy" ${selected || file ? '' : 'disabled'}>Copy</button>
-                <button id="gc-move" ${selected || file ? '' : 'disabled'}>Move</button>
-                <button id="gc-delete" class="danger" ${selected || file ? '' : 'disabled'}>Delete</button>
-              </div>
-            </div>
+        ${this.workspaceActionsHtml()}
+        <div class="gc-workspace">${this.paneHtml('left')}${this.paneHtml('right')}</div>
+        ${this.workspaceActionsHtml(true)}
+        ${file ? `<section class="gc-card gc-editor-card">
+          <div class="gc-head"><div class="gc-title"><h2>Editor / Preview</h2><p>${this.escape(file.root)}:/${this.escape(file.path)}</p></div><div class="gc-tools"><span id="gc-dirty" role="status">${this.isDirty() ? '● Unsaved changes' : 'Saved / read-only'}</span><button id="gc-editor-reload">Reload from disk</button><button id="gc-editor-close">Close editor</button></div></div>
             <div class="gc-panel">
-              ${file ? `
+              ${file.preview === 'image' ? `<img class="gc-image-preview" src="${this.escape(this.previewUrl)}" alt="${this.escape(file.name)}">` : file.preview === 'archive' ? `<div class="gc-archive-preview"><strong>${file.entries.length} archive entries</strong><ul>${file.entries.map(entry => `<li>${this.escape(entry.name)} · ${this.escape(this.formatSize(entry.size))}</li>`).join('')}</ul></div>` : file ? `
                 ${this.isGravPageMarkdownPath(file.path) ? `<div class="gc-empty">This looks like a Grav page Markdown file. Use <button type="button" id="gc-open-grav-editor-inline">Open in Grav Editor</button> for the full page workflow, or continue here for raw Markdown editing.</div>` : ''}
-                <textarea id="gc-editor" spellcheck="false" ${file.editable ? '' : 'readonly'}>${this.escape(file.content || '')}</textarea>
+                <textarea id="gc-editor" aria-label="File contents" spellcheck="false" ${file.editable ? '' : 'readonly'}>${this.escape(file.content || '')}</textarea>
                 <div class="gc-tools">
                   <button id="gc-save" class="primary" ${file.editable ? '' : 'disabled'}>${file.editable ? 'Save file' : 'Read-only preview'}</button>
-                  <button id="gc-download">Download</button>
-                  <button id="gc-zip">Zip</button>
-                  ${/\.zip$/i.test(file.name || file.path || '') ? '<button id="gc-extract">Extract ZIP</button>' : ''}
-                  <button id="gc-backup-file">Backup this file</button>
+                  ${file.editable ? '<button id="gc-validate">Validate document</button>' : ''}
+                  <span class="gc-muted-small">Cmd/Ctrl+S saves · YAML, JSON and Markdown frontmatter checked before save</span>
                 </div>
                 ${jarvisEligible ? `
                 <section class="gc-jarvis" aria-label="Jarvis file assistant">
@@ -1623,21 +1861,9 @@ class GravCommanderPage extends HTMLElement {
                       ${jarvisProposal.mode === 'proposal' && !jarvisProposal.context?.accept_allowed ? '<div class="gc-footer-note">Apply is unavailable for read-only, truncated, redacted, or oversized proposals. Copy remains available.</div>' : ''}
                     </div>` : ''}
                 </section>` : ''}
-                ${file.editable ? '' : '<div class="gc-footer-note">This file is viewable but not editable. Add its extension to editable_extensions, confirm the root is writable, and make sure the file itself is writable if you really want to edit it.</div>'}` : selected ? `
-                <div class="gc-empty">
-                  <strong>${this.escape(selected.name)}</strong><br>
-                  ${selected.type === 'dir' ? 'Folder selected. Double-click it or press Enter in the file list to open it.' : (selected.editable ? 'This file is editable. Double-click it or use Open/Edit above.' : (selected.viewable ? 'This file can be viewed read-only. Use View above.' : 'This file is treated as binary/read-only. Use Download if you need a local copy.'))}
-                </div>
-                <div class="gc-tools">
-                  ${selected.type !== 'dir' ? `<button type="button" id="gc-open">${selected.editable ? 'Open/Edit' : 'View'}</button><button id="gc-download">Download</button>` : ''}
-                  <button id="gc-zip">Zip selected item</button>
-                  ${selected.type !== 'dir' && (selected.extractable || selected.archive || /\.zip$/i.test(selected.name || '')) ? '<button id="gc-extract">Extract ZIP</button>' : ''}
-                  <button id="gc-backup-file">Backup selected item</button>
-                </div>` : `
-                <div class="gc-empty">Pick an editable text-ish file to open it here. PHP and executable-style files are blocked by default, because dragons live there.</div>`}
+                ${file.editable ? '' : '<div class="gc-footer-note">Read-only preview. Editing is controlled by root and extension permissions.</div>'}` : ''}
             </div>
-          </section>
-        </div>
+          </section>` : ''}
         ` : ''}
 
         ${activeTab === 'backups' ? `
@@ -1779,8 +2005,8 @@ class GravCommanderPage extends HTMLElement {
           </div>
         </section>
         ` : ''}
-        ${busy ? `<div class="gc-busy-overlay"><div class="gc-busy-box"><span class="gc-spinner"></span><strong>${this.escape(busyLabel || 'Working…')}</strong></div></div>` : ''}
-        ${modal ? `<div class="gc-modal-backdrop" role="dialog" aria-modal="true">
+        ${busy ? `<div class="gc-busy-overlay"><div class="gc-busy-box" role="status" aria-live="polite"><span class="gc-spinner"></span><strong>${this.escape(busyLabel || 'Working…')}</strong></div></div>` : ''}
+        ${modal ? `<div class="gc-modal-backdrop" role="dialog" aria-modal="true" aria-label="${this.escape(modal.title)}">
           <div class="gc-modal">
             <div class="gc-modal-head"><h3>${this.escape(modal.title)}</h3></div>
             <div class="gc-modal-body">${this.escape(modal.message)}</div>
@@ -1794,27 +2020,14 @@ class GravCommanderPage extends HTMLElement {
     `;
 
     this.bindEvents(parent);
+    this.bindWorkspace();
+    scrolls.forEach(([id, top]) => { const list = this.shadowRoot.querySelector(`[data-pane="${id}"] .gc-table-wrap`); if (list) list.scrollTop = top; });
   }
 
   bindEvents(parent) {
     this.shadowRoot.querySelector('#gc-modal-cancel')?.addEventListener('click', () => this.closeModal(false));
     this.shadowRoot.querySelector('#gc-modal-ok')?.addEventListener('click', () => this.closeModal(true));
 
-    const rootSelect = this.shadowRoot.querySelector('#gc-root');
-    rootSelect?.addEventListener('change', e => {
-      this.setState({ root: e.target.value, path: '' });
-      this.guard(() => this.loadList());
-    });
-    this.shadowRoot.querySelector('#gc-go')?.addEventListener('click', () => {
-      const nextPath = this.shadowRoot.querySelector('#gc-path')?.value || '';
-      this.setState({ path: nextPath });
-      this.guard(() => this.loadList());
-    });
-    this.shadowRoot.querySelector('#gc-path')?.addEventListener('keydown', e => {
-      if (e.key === 'Enter') this.shadowRoot.querySelector('#gc-go')?.click();
-    });
-    this.shadowRoot.querySelector('#gc-up')?.addEventListener('click', () => this.openDir(parent || ''));
-    this.shadowRoot.querySelector('#gc-refresh')?.addEventListener('click', () => this.guard(() => this.loadList()));
     this.shadowRoot.querySelector('#gc-settings')?.addEventListener('click', () => this.openPluginSettings());
     this.shadowRoot.querySelector('#gc-use-suggested-path')?.addEventListener('click', () => this.useSuggestedBackupPath());
     this.shadowRoot.querySelector('#gc-tab-files')?.addEventListener('click', () => this.setState({ activeTab: 'files' }));
@@ -1822,30 +2035,10 @@ class GravCommanderPage extends HTMLElement {
     this.shadowRoot.querySelector('#gc-new-folder')?.addEventListener('click', () => this.makeFolder());
     this.shadowRoot.querySelector('#gc-upload')?.addEventListener('change', e => this.uploadFile(e.target.files?.[0]));
 
-    this.shadowRoot.querySelectorAll('tr[data-idx]').forEach(row => {
-      row.addEventListener('click', () => {
-        const item = this.state.items[Number(row.dataset.idx)];
-        this.setState({ selected: item, file: null });
-        this.shadowRoot.querySelector(`tr[data-idx="${Number(row.dataset.idx)}"] .gc-file-entry`)?.focus();
-      });
-      row.addEventListener('keydown', event => {
-        if (event.key !== 'Enter') return;
-        event.preventDefault();
-        const item = this.state.items[Number(row.dataset.idx)];
-        if (item.type === 'dir') this.openDir(item.path);
-        else this.openFile(item);
-      });
-      row.addEventListener('dblclick', () => {
-        const item = this.state.items[Number(row.dataset.idx)];
-        if (item.type === 'dir') this.openDir(item.path);
-        else this.openFile(item);
-      });
-    });
-
     this.shadowRoot.querySelectorAll('#gc-open-grav-editor, #gc-open-grav-editor-inline').forEach(btn => btn.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
-      this.openGravPageEditor((this.state.selected || this.state.file)?.path || '');
+      this.openGravPageEditor((btn.id.endsWith('-inline') ? this.state.file : this.state.selected)?.path || '');
     }));
     this.shadowRoot.querySelectorAll('#gc-open').forEach(btn => btn.addEventListener('click', event => {
       event.preventDefault();
@@ -1859,6 +2052,8 @@ class GravCommanderPage extends HTMLElement {
     this.shadowRoot.querySelector('#gc-editor')?.addEventListener('input', event => {
       // Theme/notice rerenders must retain the unsaved buffer, never save it.
       if (this.state.file) this.state.file = { ...this.state.file, content: event.target.value };
+      const label = this.shadowRoot.querySelector('#gc-dirty');
+      if (label) label.textContent = this.isDirty() ? '● Unsaved changes' : 'Saved / read-only';
     });
     this.shadowRoot.querySelector('#gc-jarvis-provider')?.addEventListener('change', event => {
       if (this.state.file) this.state.file = { ...this.state.file, content: this.editorContent() };

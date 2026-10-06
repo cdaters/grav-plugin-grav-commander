@@ -1,8 +1,21 @@
 {
   "name": "cdaters/grav-plugin-grav-commander",
   "type": "grav-plugin",
-  "description": "Admin2-first Commander-style file manager with guarded backup and restore tools for Grav.",
-  "keywords": ["grav", "plugin", "admin2", "file-manager", "backup"],
+  "description": "Grav-native dual-pane file and site operations workspace for Admin2 with safe editing, archives and backups.",
+  "keywords": [
+    "admin",
+    "admin2",
+    "backup",
+    "developer",
+    "editor",
+    "media",
+    "file",
+    "file-manager",
+    "archive",
+    "restore",
+    "schedule",
+    "grav2"
+  ],
   "license": "MIT",
   "authors": [
     {

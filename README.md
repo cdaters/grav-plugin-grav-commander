@@ -1,7 +1,66 @@
 # Grav Commander
 
-Release 0.3.15 updates standard Grav blueprint keywords for discovery.
-Package functionality is unchanged from 0.3.14.
+Release 0.4.0 is a Grav-native file and site operations workspace for Admin2.
+
+## Workspace quickstart
+
+Each pane has its own root, folder, breadcrumbs, back/forward history, filename
+filter and sort order. Click an item or the pane heading to choose the active
+**Source**; the other pane is the **Destination**. Copy and Move show both locations
+and the selected paths before submitting one coordinated request. At widths under
+850px, use **Switch pane** (or F6) to work with one location at a time.
+
+Click selects, checkboxes or Cmd/Ctrl-click toggle, Shift-click selects a range, and **Select all
+visible** selects the current filtered list. Changing the filter clears selection,
+so hidden files cannot accidentally be included. Folders include their contents and
+associated page media. Duplicate asks for a new name beside the original; numbered
+page folders retain their full contents. Rename does not renumber other pages.
+
+New file creates an empty allowed text file (JSON starts as `{}`). New folder works
+at the root too. Upload accepts one file at a time, including desktop drops onto a
+pane. Archive selection creates one ZIP in the active folder; download that ZIP for
+a multi-item download. ZIP inspection lists bounded entries before extraction.
+Image previews support PNG/JPEG/GIF/WebP/AVIF up to 10 MB. Active content is never
+rendered as HTML; text and archive names are escaped.
+
+The editor stays open while either pane navigates. It records the file's own root,
+path and SHA-256 revision. Save validates YAML, JSON and Markdown frontmatter;
+external disk changes require reload/review. Close, replacement, native editor
+launch, sidebar navigation and browser unload guard unsaved edits. Reload requires
+confirmation if dirty. Jarvis Apply still updates only the unsaved buffer.
+
+Keyboard shortcuts apply inside a file listing: arrows navigate/select, Enter opens,
+Backspace goes up, F2 renames, Delete confirms deletion, Cmd/Ctrl+A selects visible
+items, Cmd/Ctrl+C/X records copy/move intent, and Cmd/Ctrl+V operates in the focused
+pane. F6 switches panes; Cmd/Ctrl+S saves an editable buffer; Escape cancels dialogs
+or closes the editor with dirty protection. Text inputs keep ordinary editing keys.
+
+Operations never overwrite a collision. The entire selection is checked before
+mutation, including duplicate/overlapping paths and recursive-delete policy. Defaults
+limit a request to 200 selected paths, 10,000 descendants and 512 MiB; advanced
+configuration keys are `max_operation_files` and `max_operation_bytes`. Split larger
+work into smaller operations. Paths stay inside configured roots; symlinks, special
+files, root mutations and self-descendant destinations are rejected. Permissions,
+API scope/demo restrictions, blocked formats, pre-destructive backups and guarded
+restore remain enforced on the server.
+
+Batches are coordinated, **not filesystem transactions**. A later I/O failure can
+leave earlier items completed; Commander reports completed, failed and unattempted
+items. A partial copy may remain at its destination. Reload both locations and review
+before retrying. Keep the workspace open during operations: status is indeterminate,
+not a fabricated percentage, and server work cannot be cancelled from the browser.
+No persistent/background job queue is claimed.
+
+Grav-aware labels identify page folders/media, plugin/theme package contents and
+configuration. Markdown beneath the actual `user/pages` tree offers **Open in Grav
+Editor** as well as **Edit Raw**, even through a custom root alias. Commander does
+not rewrite page links, route overrides, plugin registrations or theme dependencies
+when files move. Review those site relationships before moving package/page folders.
+
+Syntax highlighting, line-number gutters, cross-pane drag/drop, recursive search,
+semantic refactoring, and resumable background jobs remain future work. The workspace
+inherits Admin2 Light, Dark and Follow OS preferences.
+
 
 Grav Commander is an Admin2-first file manager, archive toolkit, and guarded Backup Center for Grav 2.
 
@@ -60,7 +119,7 @@ Grav Commander is alpha software for Grav 2 and Admin2. Use it locally or on sta
 ## Requirements
 
 - Grav 2.0 or newer.
-- Grav API plugin 1.0 or newer.
+- Grav API plugin 1.0.44 or newer.
 - Admin2 / admin-next.
 - PHP 8.3 or newer.
 - PHP `zip` extension for archive, backup, and restore tools.
@@ -184,7 +243,7 @@ Markdown files under the Pages root can be opened in Grav's page editor. Raw tex
 
 ## Optional Jarvis actions
 
-When `grav-jarvis` is installed and enabled, Commander 0.3.12 can consume its
+When `grav-jarvis` is installed and enabled, Commander can consume its
 public PHP service for one bounded file at a time. Jarvis is optional: removing,
 disabling, or misconfiguring it hides or fails only the Jarvis panel. Browsing,
 editing, archives, backups, and every other Commander feature continue to work.
@@ -363,9 +422,8 @@ Scheduled backup jobs use the same command internally.
 - Jarvis does not analyze directories, binary/media contents, multiple files,
   selections, or site-wide context. It has no autonomous file write, job, MCP,
   or background workflow in Commander.
-- Commander 0.3.12 protects proposal Apply from an externally changed file
-  version. The existing ordinary Save endpoint predates this integration and
-  does not yet provide general optimistic-concurrency conflict detection.
+- Proposal Apply and ordinary editor Save both detect changed disk content; Apply
+  remains separate from the explicit Save action.
 
 ## Roadmap Link
 
@@ -389,7 +447,8 @@ MIT. See [LICENSE](LICENSE).
 
 API/Admin2 operations require API plugin **1.0.44 or newer**. The API permission resolver enforces API-key scopes, group grants and demo restrictions. Grant the documented plugin permissions plus `api.access`, or use `api.super` for a trusted API administrator. Legacy `admin.super` alone is not API authority. Keep API keys narrowly scoped; no permission bypass is provided by this plugin.
 
-## CGPM release 0.3.14
+## Distribution
 
-This candidate uses a fresh version for immutable CGPM distribution. Existing unmanaged
-installations are not adopted. Review testing artifacts before stable promotion.
+0.4.0 is a separate immutable release candidate. Existing public release bytes
+remain unchanged. Authoritative development uses the deterministic public export;
+release publication and repository catalog promotion are separate operator actions.

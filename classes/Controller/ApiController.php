@@ -6,9 +6,13 @@ namespace Grav\Plugin\GravCommander\Controller;
 
 use Grav\Framework\Psr7\Response;
 use Grav\Plugin\Api\Controllers\AbstractApiController;
-use Grav\Plugin\Api\Exceptions\ForbiddenException;
+use Grav\Plugin\Api\Exceptions\ApiException;
 use Grav\Plugin\Api\Exceptions\ValidationException;
 use Grav\Plugin\Api\Response\ApiResponse;
+use Grav\Plugin\GravCommander\Jarvis\JarvisContextPolicy;
+use Grav\Plugin\GravCommander\Jarvis\JarvisIntegrationException;
+use Grav\Plugin\GravCommander\Jarvis\JarvisIntegrationService;
+use Grav\Plugin\GravCommander\Jarvis\JarvisProposalStore;
 use Grav\Plugin\GravCommander\Service\FileService;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -20,39 +24,10 @@ class ApiController extends AbstractApiController
         return new FileService();
     }
 
-    /**
-     * Admin2/API permissions are still settling in Grav 2 RC land.
-     * This wrapper accepts plugin-specific permissions, api.super, and admin.super
-     * so site super admins are not locked out of their own toolbox.
-     */
     private function requireCommanderPermission(ServerRequestInterface $request, string $permission): void
     {
-        $user = $this->getUser($request);
-
-        if ($this->userHasPermission($user, $permission)
-            || $this->userHasPermission($user, 'api.super')
-            || $this->userHasPermission($user, 'admin.super')) {
-            return;
-        }
-
-        throw new ForbiddenException('Missing required permission: ' . $permission);
-    }
-
-    private function userHasPermission(?object $user, string $permission): bool
-    {
-        if (!$user) {
-            return false;
-        }
-
-        if (method_exists($user, 'authorize') && (bool) $user->authorize($permission)) {
-            return true;
-        }
-
-        if (method_exists($user, 'get') && (bool) $user->get('access.' . $permission)) {
-            return true;
-        }
-
-        return false;
+        // API 1.0.44 owns scope caps, group ACLs, demo restrictions and API super authority.
+        $this->requirePermission($request, $permission);
     }
 
     public function status(ServerRequestInterface $request): ResponseInterface
@@ -372,5 +347,232 @@ class ApiController extends AbstractApiController
         $this->requireCommanderPermission($request, 'grav-commander.backup');
         $name = (string) $this->getRouteParam($request, 'name');
         return ApiResponse::create($this->service()->deleteBackup($name));
+    }
+
+    public function jarvisStatus(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requireCommanderPermission($request, 'grav-commander.browse');
+        $this->requireCommanderPermission($request, 'grav-jarvis.use');
+        if (!$this->jarvisIntegrationEnabled()) {
+            return ApiResponse::create([
+                'available' => false,
+                'state' => 'disabled',
+                'message' => 'The optional Commander Jarvis integration is disabled.',
+                'providers' => [],
+                'actions' => [],
+            ]);
+        }
+        return ApiResponse::create($this->jarvis()->status());
+    }
+
+    public function jarvisModels(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requireCommanderPermission($request, 'grav-commander.browse');
+        $this->requireCommanderPermission($request, 'grav-jarvis.use');
+        $this->assertJarvisIntegrationEnabled();
+        try {
+            return ApiResponse::create($this->jarvis()->models($this->jarvisProviderId($request)));
+        } catch (JarvisIntegrationException $error) {
+            throw $this->jarvisApiFailure($error);
+        } catch (\Throwable) {
+            throw new ApiException(503, 'Jarvis Unavailable', 'Jarvis could not discover models for this provider.');
+        }
+    }
+
+    public function jarvisValidate(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requireCommanderPermission($request, 'grav-commander.browse');
+        $this->requireCommanderPermission($request, 'grav-jarvis.use');
+        $this->assertJarvisIntegrationEnabled();
+        try {
+            return ApiResponse::create($this->jarvis()->validate($this->jarvisProviderId($request)));
+        } catch (JarvisIntegrationException $error) {
+            throw $this->jarvisApiFailure($error);
+        }
+    }
+
+    public function jarvisPropose(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requireCommanderPermission($request, 'grav-commander.browse');
+        $this->requireCommanderPermission($request, 'grav-jarvis.use');
+        $this->assertJarvisIntegrationEnabled();
+        $body = $this->jarvisBody($request, [
+            'root', 'path', 'content', 'action', 'provider_id', 'model', 'custom_instruction',
+        ]);
+        $action = $this->jarvisString($body, 'action', 32);
+        if (in_array($action, ['improve', 'custom'], true)) {
+            $this->requireCommanderPermission($request, 'grav-commander.write');
+        }
+        try {
+            return ApiResponse::create($this->jarvis()->propose(
+                $this->jarvisActor($request),
+                $this->jarvisString($body, 'root', 64),
+                $this->jarvisString($body, 'path', 2048),
+                $this->jarvisString($body, 'content', JarvisIntegrationService::MAX_REQUEST_CONTENT_BYTES, true),
+                $action,
+                $this->jarvisString($body, 'provider_id', 64),
+                $this->jarvisOptionalString($body, 'model', 256),
+                $this->jarvisOptionalString($body, 'custom_instruction', 4000)
+            ));
+        } catch (JarvisIntegrationException $error) {
+            throw $this->jarvisApiFailure($error);
+        } catch (\InvalidArgumentException) {
+            throw new ValidationException('The Commander Jarvis request is invalid.');
+        } catch (\Throwable) {
+            throw new ApiException(503, 'Jarvis Unavailable', 'Jarvis could not complete this Commander action.');
+        }
+    }
+
+    public function jarvisAccept(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requireCommanderPermission($request, 'grav-commander.write');
+        $this->requireCommanderPermission($request, 'grav-jarvis.use');
+        $this->assertJarvisIntegrationEnabled();
+        $body = $this->jarvisBody($request, ['root', 'path', 'current_content', 'proposed_content']);
+        try {
+            return ApiResponse::create($this->jarvis()->accept(
+                $this->jarvisActor($request),
+                (string) $this->getRouteParam($request, 'id'),
+                $this->jarvisString($body, 'root', 64),
+                $this->jarvisString($body, 'path', 2048),
+                $this->jarvisString($body, 'current_content', JarvisIntegrationService::MAX_REQUEST_CONTENT_BYTES, true),
+                $this->jarvisString($body, 'proposed_content', JarvisIntegrationService::MAX_REQUEST_CONTENT_BYTES, true)
+            ));
+        } catch (JarvisIntegrationException $error) {
+            throw $this->jarvisApiFailure($error);
+        }
+    }
+
+    public function jarvisDiscard(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requireCommanderPermission($request, 'grav-commander.browse');
+        $this->requireCommanderPermission($request, 'grav-jarvis.use');
+        $this->assertJarvisIntegrationEnabled();
+        $body = $this->jarvisBody($request, ['root', 'path']);
+        try {
+            $this->jarvis()->discard(
+                $this->jarvisActor($request),
+                (string) $this->getRouteParam($request, 'id'),
+                $this->jarvisString($body, 'root', 64),
+                $this->jarvisString($body, 'path', 2048)
+            );
+            return ApiResponse::create(['discarded' => true]);
+        } catch (JarvisIntegrationException $error) {
+            throw $this->jarvisApiFailure($error);
+        }
+    }
+
+    private function jarvis(): JarvisIntegrationService
+    {
+        $cache = '';
+        $locator = $this->grav['locator'] ?? null;
+        if (is_object($locator) && method_exists($locator, 'findResource')) {
+            $cache = (string) $locator->findResource('cache://');
+        }
+        if ($cache === '') {
+            throw new ApiException(503, 'Jarvis Unavailable', 'Commander temporary proposal storage is unavailable.');
+        }
+        $config = (array) $this->grav['config']->get('plugins.grav-commander.jarvis', []);
+        $maxContextBytes = max(4096, min(262144, (int) ($config['max_context_bytes'] ?? JarvisContextPolicy::DEFAULT_CONTEXT_BYTES)));
+        $maxLargeContextBytes = max(
+            $maxContextBytes,
+            min(2097152, (int) ($config['max_large_context_bytes'] ?? JarvisContextPolicy::DEFAULT_LARGE_CONTEXT_BYTES))
+        );
+        return new JarvisIntegrationService(
+            $this->grav,
+            $this->service(),
+            new JarvisContextPolicy($maxContextBytes, $maxLargeContextBytes),
+            new JarvisProposalStore(rtrim($cache, '/\\') . '/grav-commander/jarvis-proposals'),
+            $this->jarvisSiteScope()
+        );
+    }
+
+    private function jarvisIntegrationEnabled(): bool
+    {
+        return (bool) $this->grav['config']->get('plugins.grav-commander.jarvis.enabled', true);
+    }
+
+    private function assertJarvisIntegrationEnabled(): void
+    {
+        if (!$this->jarvisIntegrationEnabled()) {
+            throw new ApiException(503, 'Jarvis Unavailable', 'The optional Commander Jarvis integration is disabled.');
+        }
+    }
+
+    /** @param list<string> $allowed @return array<string, mixed> */
+    private function jarvisBody(ServerRequestInterface $request, array $allowed): array
+    {
+        $body = $this->getRequestBody($request);
+        if (array_diff(array_keys($body), $allowed) !== []) {
+            throw new ValidationException('The Commander Jarvis request contains unsupported fields.');
+        }
+        return $body;
+    }
+
+    /** @param array<string, mixed> $body */
+    private function jarvisString(array $body, string $key, int $maxBytes, bool $allowEmpty = false): string
+    {
+        $value = $body[$key] ?? null;
+        if (!is_string($value) || (!$allowEmpty && trim($value) === '') || strlen($value) > $maxBytes
+            || preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $value) === 1) {
+            throw new ValidationException("The {$key} field is invalid or exceeds its safety limit.");
+        }
+        return $value;
+    }
+
+    /** @param array<string, mixed> $body */
+    private function jarvisOptionalString(array $body, string $key, int $maxBytes): ?string
+    {
+        if (!isset($body[$key]) || $body[$key] === '') return null;
+        return $this->jarvisString($body, $key, $maxBytes);
+    }
+
+    private function jarvisProviderId(ServerRequestInterface $request): string
+    {
+        $id = trim(rawurldecode((string) $this->getRouteParam($request, 'id')));
+        if (preg_match('/^[a-z][a-z0-9._-]{0,63}$/D', $id) !== 1) {
+            throw new ValidationException('The selected Jarvis provider is invalid.');
+        }
+        return $id;
+    }
+
+    private function jarvisActor(ServerRequestInterface $request): string
+    {
+        $user = $this->getUser($request);
+        foreach (['username', 'email', 'id'] as $property) {
+            if (is_object($user) && method_exists($user, 'get')) {
+                $value = $user->get($property);
+                if (is_scalar($value) && (string) $value !== '') return $property . ':' . (string) $value;
+            }
+        }
+        return 'authenticated:' . (is_object($user) ? spl_object_id($user) : 'unknown');
+    }
+
+    private function jarvisSiteScope(): string
+    {
+        $locator = $this->grav['locator'] ?? null;
+        $userPath = is_object($locator) && method_exists($locator, 'findResource')
+            ? (string) $locator->findResource('user://')
+            : '';
+        return 'site:' . hash('sha256', $userPath !== '' ? $userPath : 'grav-default-site');
+    }
+
+    private function jarvisApiFailure(JarvisIntegrationException $error): ApiException
+    {
+        [$status, $title] = match ($error->category) {
+            'rate_limited' => [429, 'Provider Rate Limited'],
+            'context_too_large', 'unsafe_partial_rewrite', 'unsupported_file', 'sensitive_file',
+            'empty_context', 'invalid_context', 'invalid_action', 'invalid_model',
+            'unsupported_capability', 'budget_exceeded' => [422, 'Jarvis Action Unavailable'],
+            'proposal_conflict' => [409, 'Proposal Conflict'],
+            'response_invalid' => [502, 'Invalid Provider Response'],
+            default => [503, 'Jarvis Unavailable'],
+        };
+        return new ApiException(
+            statusCode: $status,
+            errorTitle: $title,
+            detail: $error->getMessage(),
+            errorCode: 'commander_jarvis_' . preg_replace('/[^a-z0-9_]+/', '_', $error->category)
+        );
     }
 }

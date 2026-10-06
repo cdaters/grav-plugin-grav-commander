@@ -1,21 +1,21 @@
 name: Grav Commander
 slug: grav-commander
 type: plugin
-version: 0.3.11
+version: 0.3.15
 description: Admin2-first file manager, archive toolkit, and guarded Backup Center for Grav 2.
 icon: folder-tree
 author:
   name: Craig Daters
   email: craig@daters.net
 homepage: https://github.com/cdaters/grav-plugin-grav-commander
-keywords: grav, plugin, admin2, file manager, backup, commander
+keywords: admin, admin2, backup, developer, editor, media, file, file-manager, archive, restore, schedule, grav2
 bugs: https://github.com/cdaters/grav-plugin-grav-commander/issues
 docs: https://github.com/cdaters/grav-plugin-grav-commander/blob/main/README.md
 license: MIT
 
 dependencies:
   - { name: grav, version: '>=2.0.0' }
-  - { name: api, version: '>=1.0.0' }
+  - { name: api, version: '>=1.0.44' }
 
 compatibility:
   grav:
@@ -48,6 +48,38 @@ form:
         0: No
       validate:
         type: bool
+
+    jarvis.enabled:
+      type: toggle
+      label: Optional Jarvis actions
+      help: Shows provider-neutral Jarvis actions for eligible text files when grav-jarvis is installed and the user has both Commander and Jarvis permissions.
+      highlight: 1
+      default: 1
+      options:
+        1: Enabled
+        0: Disabled
+      validate:
+        type: bool
+
+    jarvis.max_context_bytes:
+      type: number
+      label: Jarvis direct context limit in bytes
+      help: Explain and Review may use an explicitly truncated context above this bound. Rewrite and Custom Prompt fail closed rather than rewriting a partial file.
+      default: 49152
+      validate:
+        type: int
+        min: 4096
+        max: 262144
+
+    jarvis.max_large_context_bytes:
+      type: number
+      label: Jarvis large Markdown summary limit in bytes
+      help: Markdown Summarize may use Jarvis public chunking up to this bound. Other large actions remain bounded by the direct context limit.
+      default: 196608
+      validate:
+        type: int
+        min: 4096
+        max: 2097152
 
     max_upload_size:
       type: number

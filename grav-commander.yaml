@@ -3,6 +3,11 @@ enabled: true
 admin:
   show_sidebar: true
 
+jarvis:
+  enabled: true
+  max_context_bytes: 49152
+  max_large_context_bytes: 196608
+
 max_upload_size: 10485760
 max_edit_size: 1048576
 allow_php_editing: false

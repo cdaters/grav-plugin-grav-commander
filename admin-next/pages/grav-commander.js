@@ -36,6 +36,16 @@ class GravCommanderPage extends HTMLElement {
       theme: 'dark',
       modal: null,
       noticeTimer: null,
+      jarvisStatus: null,
+      jarvisProvider: '',
+      jarvisModels: [],
+      jarvisModel: '',
+      jarvisAction: 'explain',
+      jarvisCustomInstruction: '',
+      jarvisProposal: null,
+      jarvisBusy: false,
+      jarvisMessage: '',
+      jarvisError: '',
     };
   }
 
@@ -171,6 +181,8 @@ class GravCommanderPage extends HTMLElement {
 
   async api(path, options = {}) {
     const opts = {
+      credentials: 'omit',
+      cache: 'no-store',
       ...options,
       headers: { ...(options.headers || {}) },
     };
@@ -267,15 +279,20 @@ class GravCommanderPage extends HTMLElement {
   async loadRoots() {
     this.setState({ busy: true, error: '', message: '' });
     try {
-      const [roots, status] = await Promise.all([
+      const [roots, status, jarvisStatus] = await Promise.all([
         this.api('/grav-commander/roots'),
         this.api('/grav-commander/status').catch(err => ({ error: err.message || String(err), profiles: {} })),
+        this.api('/grav-commander/jarvis/status').catch(() => ({ available: false, providers: [], actions: [] })),
       ]);
       const rootList = Array.isArray(roots) ? roots : [];
       const profiles = status?.profiles || {};
       const schedules = status?.schedules || {};
       const profileKeys = Object.keys(profiles);
       const first = rootList.find(r => r.key === this.state.root) || rootList[0];
+      const jarvisProviders = Array.isArray(jarvisStatus?.providers) ? jarvisStatus.providers : [];
+      const jarvisProvider = jarvisProviders.some(provider => provider.id === this.state.jarvisProvider)
+        ? this.state.jarvisProvider
+        : (jarvisProviders[0]?.id || '');
       this.state = {
         ...this.state,
         roots: rootList,
@@ -284,7 +301,9 @@ class GravCommanderPage extends HTMLElement {
         profileRows: this.profilesToRows(profiles),
         scheduleRows: this.schedulesToRows(schedules),
         profileDraft: JSON.stringify(profiles, null, 2),
-        root: first?.key || 'pages'
+        root: first?.key || 'pages',
+        jarvisStatus,
+        jarvisProvider,
       };
       await this.loadList(false);
     } catch (err) {
@@ -299,7 +318,7 @@ class GravCommanderPage extends HTMLElement {
   async loadList(render = true) {
     const { root, path } = this.state;
     const data = await this.api(`/grav-commander/list?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`);
-    const patch = { items: data.items || [], path: data.path || '', parent: data.parent || '', selected: null, file: null };
+    const patch = { items: data.items || [], path: data.path || '', parent: data.parent || '', selected: null, file: null, jarvisProposal: null, jarvisError: '', jarvisMessage: '' };
     if (render) this.setState(patch);
     else this.state = { ...this.state, ...patch };
   }
@@ -312,8 +331,167 @@ class GravCommanderPage extends HTMLElement {
   async openFile(item) {
     await this.guard(async () => {
       const file = await this.api(`/grav-commander/read?root=${encodeURIComponent(this.state.root)}&path=${encodeURIComponent(item.path)}`);
-      this.setState({ selected: item, file, message: `Opened ${item.name}` });
+      this.setState({ selected: item, file, message: `Opened ${item.name}`, jarvisAction: 'explain', jarvisProposal: null, jarvisError: '', jarvisMessage: '' });
     });
+  }
+
+  editorContent() {
+    const textarea = this.shadowRoot.querySelector('#gc-editor');
+    return textarea ? textarea.value : (this.state.file?.content || '');
+  }
+
+  jarvisEligibleFile(file) {
+    if (!file || !file.viewable) return false;
+    const path = String(file.path || '').toLowerCase();
+    const name = path.split('/').pop() || '';
+    if (/(^|\/)(\.env(?:\.|$)|\.ssh(?:\/|$)|accounts?(?:\/|$)|credentials?(?:\/|$)|secrets?(?:\/|$)|private[-_]?keys?(?:\/|$))/.test(path)) return false;
+    if (/(^|[._-])(credential|password|private[-_]?key|secret|token)([._-]|$)/.test(name)) return false;
+    return [
+      'css', 'csv', 'html', 'htm', 'ini', 'inc', 'js', 'json', 'jsx', 'less', 'markdown', 'md',
+      'mjs', 'php', 'scss', 'source', 'sql', 'svg', 'text', 'toml', 'ts', 'tsx', 'twig', 'txt',
+      'xml', 'yaml', 'yml'
+    ].includes(String(file.extension || '').toLowerCase()) || ['makefile', 'readme'].includes(name);
+  }
+
+  async loadJarvisModels() {
+    const provider = this.state.jarvisProvider;
+    if (!provider) return;
+    this.setState({ jarvisBusy: true, jarvisError: '', jarvisMessage: 'Loading models…' });
+    try {
+      const data = await this.api(`/grav-commander/jarvis/providers/${encodeURIComponent(provider)}/models`);
+      const models = Array.isArray(data.models) ? data.models.filter(model => model.available !== false) : [];
+      this.setState({
+        jarvisModels: models,
+        jarvisModel: models.some(model => model.id === this.state.jarvisModel) ? this.state.jarvisModel : '',
+        jarvisMessage: data.message || (models.length ? `${models.length} model${models.length === 1 ? '' : 's'} loaded.` : 'Provider default model will be used.'),
+      });
+    } catch (err) {
+      this.setState({ jarvisModels: [], jarvisModel: '', jarvisError: err.message || String(err), jarvisMessage: '' });
+    } finally {
+      this.setState({ jarvisBusy: false });
+    }
+  }
+
+  async validateJarvisProvider() {
+    const provider = this.state.jarvisProvider;
+    if (!provider) return;
+    this.setState({ jarvisBusy: true, jarvisError: '', jarvisMessage: 'Validating provider without generating content…' });
+    try {
+      const data = await this.api(`/grav-commander/jarvis/providers/${encodeURIComponent(provider)}/validate`, { method: 'POST', body: '{}' });
+      this.setState({
+        jarvisMessage: data.usable ? 'Provider configuration is usable.' : 'Provider configuration is not currently usable.',
+        jarvisError: data.usable ? '' : (data.issues?.[0]?.message || 'Provider validation failed.'),
+      });
+    } catch (err) {
+      this.setState({ jarvisError: err.message || String(err), jarvisMessage: '' });
+    } finally {
+      this.setState({ jarvisBusy: false });
+    }
+  }
+
+  async runJarvisAction() {
+    const file = this.state.file;
+    const provider = this.state.jarvisProvider;
+    if (!file || !provider || !this.jarvisEligibleFile(file)) return;
+    const content = this.editorContent();
+    const custom = this.shadowRoot.querySelector('#gc-jarvis-custom')?.value || this.state.jarvisCustomInstruction;
+    this.state.file = { ...file, content };
+    this.state.jarvisCustomInstruction = custom;
+    this.setState({ jarvisBusy: true, jarvisError: '', jarvisMessage: 'Jarvis is preparing a bounded proposal…', jarvisProposal: null });
+    try {
+      const data = await this.api('/grav-commander/jarvis/proposals', {
+        method: 'POST',
+        body: JSON.stringify({
+          root: this.state.root,
+          path: file.path,
+          content,
+          action: this.state.jarvisAction,
+          provider_id: provider,
+          model: this.state.jarvisModel || null,
+          custom_instruction: this.state.jarvisAction === 'custom' ? custom : null,
+        }),
+      });
+      this.setState({
+        jarvisProposal: data,
+        jarvisMessage: data.context?.truncated
+          ? 'Result ready from explicitly truncated context. Review the limitation below.'
+          : data.context?.chunked
+            ? 'Result ready through Jarvis bounded Markdown chunking.'
+            : 'Jarvis result ready. No file was changed.',
+      });
+    } catch (err) {
+      this.setState({ jarvisError: err.message || String(err), jarvisMessage: '', jarvisProposal: null });
+    } finally {
+      this.setState({ jarvisBusy: false });
+    }
+  }
+
+  async acceptJarvisProposal() {
+    const proposal = this.state.jarvisProposal;
+    const file = this.state.file;
+    if (!proposal?.proposal_id || !file) return;
+    const currentContent = this.editorContent();
+    this.state.file = { ...file, content: currentContent };
+    this.setState({ jarvisBusy: true, jarvisError: '', jarvisMessage: 'Checking the one-time proposal receipt…' });
+    try {
+      const data = await this.api(`/grav-commander/jarvis/proposals/${encodeURIComponent(proposal.proposal_id)}/accept`, {
+        method: 'POST',
+        body: JSON.stringify({
+          root: this.state.root,
+          path: file.path,
+          current_content: currentContent,
+          proposed_content: proposal.output,
+        }),
+      });
+      this.setState({
+        file: { ...file, content: data.content },
+        jarvisProposal: null,
+        jarvisMessage: 'Applied to the unsaved editor buffer. Review it, then use Save file when ready.',
+      });
+    } catch (err) {
+      this.setState({ jarvisError: err.message || String(err), jarvisMessage: '' });
+    } finally {
+      this.setState({ jarvisBusy: false });
+    }
+  }
+
+  async discardJarvisProposal() {
+    const proposal = this.state.jarvisProposal;
+    const file = this.state.file;
+    if (proposal?.proposal_id && file) {
+      try {
+        await this.api(`/grav-commander/jarvis/proposals/${encodeURIComponent(proposal.proposal_id)}/discard`, {
+          method: 'POST',
+          body: JSON.stringify({ root: this.state.root, path: file.path }),
+        });
+      } catch (_) {}
+    }
+    this.setState({ jarvisProposal: null, jarvisMessage: 'Jarvis result dismissed. The editor buffer was not changed.', jarvisError: '' });
+  }
+
+  async copyJarvisResult() {
+    const output = this.state.jarvisProposal?.output;
+    if (!output) return;
+    try {
+      await navigator.clipboard.writeText(output);
+      this.setState({ jarvisMessage: 'Jarvis result copied.', jarvisError: '' });
+    } catch (_) {
+      this.setState({ jarvisError: 'The browser could not copy this result.', jarvisMessage: '' });
+    }
+  }
+
+  jarvisUsageText(proposal) {
+    if (!proposal) return '';
+    const usage = proposal.usage || {};
+    const cost = proposal.cost || {};
+    const reliability = proposal.reliability || {};
+    const units = usage.total === null || usage.total === undefined ? 'usage unknown' : `${usage.total} ${usage.unit || 'units'}`;
+    const amount = cost.estimated_amount === null || cost.estimated_amount === undefined
+      ? 'cost unknown'
+      : `${cost.currency || 'USD'} ${cost.estimated_amount}`;
+    const requests = `${usage.request_count ?? reliability.attempts ?? 1} request${(usage.request_count ?? reliability.attempts ?? 1) === 1 ? '' : 's'}`;
+    const retries = Number(usage.retry_count ?? reliability.retry_count ?? 0);
+    return `${units} · ${amount} · ${requests} · ${retries} ${retries === 1 ? 'retry' : 'retries'}${usage.cache_hit || reliability.cache_hit ? ' · cache hit' : ''}`;
   }
 
   async saveFile() {
@@ -1128,7 +1306,7 @@ class GravCommanderPage extends HTMLElement {
   }
 
   render() {
-    const { roots, root, path, parent, items, selected, file, backups, busy, busyLabel, message, error, backupError, status, activeTab, backupProfile, backupNote, showProfileEditor, profileExpert, profileRows, profileDraft, profileDraftError, scheduleRows, scheduleDraftError, profileExpanded, scheduleExpanded, theme, modal } = this.state;
+    const { roots, root, path, parent, items, selected, file, backups, busy, busyLabel, message, error, backupError, status, activeTab, backupProfile, backupNote, showProfileEditor, profileExpert, profileRows, profileDraft, profileDraftError, scheduleRows, scheduleDraftError, profileExpanded, scheduleExpanded, theme, modal, jarvisStatus, jarvisProvider, jarvisModels, jarvisModel, jarvisAction, jarvisCustomInstruction, jarvisProposal, jarvisBusy, jarvisMessage, jarvisError } = this.state;
     const currentRoot = roots.find(r => r.key === root);
     const profiles = status?.profiles || {};
     const profileKeys = Object.keys(profiles);
@@ -1142,6 +1320,10 @@ class GravCommanderPage extends HTMLElement {
     const canZip = !!actionItem;
     const canExtract = !!(actionItem && actionItem.type !== 'dir' && (actionItem.extractable || actionItem.archive || /\.zip$/i.test(actionItemName)));
     const hasNotice = !!(message || error);
+    const jarvisProviders = Array.isArray(jarvisStatus?.providers) ? jarvisStatus.providers : [];
+    const jarvisActions = (Array.isArray(jarvisStatus?.actions) ? jarvisStatus.actions : [])
+      .filter(action => file?.editable || action.mode !== 'proposal');
+    const jarvisEligible = !!(jarvisStatus?.available && jarvisProvider && this.jarvisEligibleFile(file));
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -1283,7 +1465,26 @@ class GravCommanderPage extends HTMLElement {
         .gc-modal-actions { display:flex; justify-content:flex-end; gap:10px; padding:14px 18px; border-top:1px solid var(--gc-border-soft); background:var(--gc-card-soft); }
         .gc-busy-overlay { position:fixed; inset:0; z-index:9998; display:grid; place-items:center; background:rgba(0,0,0,.36); backdrop-filter:blur(1px); }
         .gc-busy-box { display:flex; align-items:center; gap:12px; max-width:min(560px, calc(100vw - 40px)); padding:18px 20px; border:1px solid var(--gc-border); border-radius:16px; background:var(--gc-card); color:var(--gc-text); box-shadow:0 18px 60px rgba(0,0,0,.35); }
-        @media (max-width: 1100px) { .gc-shell { padding-left:8px; padding-right:8px; } .gc-main { grid-template-columns:1fr; } input[type="text"] { min-width:180px; } .gc-profile-row, .gc-schedule-row { grid-template-columns:1fr; } .gc-repeat-head { align-items:flex-start; flex-direction:column; } }
+        .gc-jarvis { display:grid; gap:12px; padding:14px; border:1px solid var(--gc-border); border-radius:14px; background:var(--gc-card-soft); }
+        .gc-jarvis-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+        .gc-jarvis-head h3 { margin:0; font-size:16px; }
+        .gc-jarvis-head p { margin:3px 0 0; color:var(--gc-muted); font-size:12px; line-height:1.4; }
+        .gc-jarvis-controls { display:grid; grid-template-columns:minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) auto; gap:8px; align-items:end; }
+        .gc-jarvis-controls label { display:grid; gap:4px; color:var(--gc-muted); font-size:12px; font-weight:700; }
+        .gc-jarvis-controls select { width:100%; min-width:0; }
+        .gc-jarvis-custom { min-height:76px; }
+        .gc-jarvis-result { display:grid; gap:10px; border-top:1px solid var(--gc-border); padding-top:12px; }
+        .gc-jarvis-result pre { margin:0; max-height:420px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; border:1px solid var(--gc-border); border-radius:10px; background:var(--gc-button); color:var(--gc-text); font:13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .gc-jarvis-meta { display:flex; flex-wrap:wrap; gap:6px; color:var(--gc-muted); font-size:12px; }
+        .gc-jarvis-status { min-height:20px; color:var(--gc-muted); font-size:12px; line-height:1.4; }
+        .gc-jarvis-status.error { color:var(--gc-danger); font-weight:600; }
+        .gc-jarvis-diff { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+        .gc-jarvis-diff section { display:grid; gap:5px; min-width:0; }
+        .gc-jarvis-diff strong { font-size:12px; color:var(--gc-muted); }
+        .gc-jarvis-diff pre { max-height:260px; }
+        .gc-file-entry { border:0; background:transparent; box-shadow:none; padding:0; font:inherit; color:inherit; text-align:left; }
+        button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline:3px solid color-mix(in srgb, var(--gc-primary) 55%, transparent); outline-offset:2px; }
+        @media (max-width: 1100px) { .gc-shell { padding-left:8px; padding-right:8px; } .gc-main { grid-template-columns:1fr; } input[type="text"] { min-width:180px; } .gc-profile-row, .gc-schedule-row, .gc-jarvis-controls, .gc-jarvis-diff { grid-template-columns:1fr; } .gc-repeat-head { align-items:flex-start; flex-direction:column; } }
       </style>
 
       <div class="gc-shell" data-theme="${this.escape(theme)}">
@@ -1312,10 +1513,10 @@ class GravCommanderPage extends HTMLElement {
           <div class="gc-head">
             <div class="gc-title"><h2>File Browser</h2><p>Root: <strong>${this.escape(currentRoot?.label || root)}</strong> / ${this.escape(path || '')}</p></div>
             <div class="gc-tools">
-              <select id="gc-root" ${roots.length ? '' : 'disabled'}>
+              <select aria-label="File root" id="gc-root" ${roots.length ? '' : 'disabled'}>
                 ${roots.length ? roots.map(r => `<option value="${this.escape(r.key)}" ${r.key === root ? 'selected' : ''}>${this.escape(r.label)}${r.writable ? '' : ' (read-only)'}</option>`).join('') : '<option>No roots loaded</option>'}
               </select>
-              <input id="gc-path" type="text" value="${this.escape(path)}" placeholder="folder/path" />
+              <input aria-label="Folder path" id="gc-path" type="text" value="${this.escape(path)}" placeholder="folder/path" />
               <button id="gc-go">Go</button>
               <button id="gc-up" ${path ? '' : 'disabled'}>Up</button>
               <button id="gc-refresh">Refresh</button>
@@ -1338,7 +1539,7 @@ class GravCommanderPage extends HTMLElement {
                 <tbody>
                   ${items.map((item, idx) => `
                     <tr data-idx="${idx}" class="${selected?.path === item.path ? 'selected' : ''}">
-                      <td><span class="gc-name"><span>${this.iconFor(item)}</span>${this.escape(item.name)}</span></td>
+                      <td><button type="button" class="gc-file-entry gc-name" title="Space to select; Enter to open" aria-label="Select ${this.escape(item.name)}"><span aria-hidden="true">${this.iconFor(item)}</span>${this.escape(item.name)}</button></td>
                       <td>${this.escape(this.formatSize(item.size))}</td>
                       <td>${this.escape(this.formatDate(item.modified))}</td>
                       <td>${item.type === 'dir' ? 'folder' : (item.editable ? 'editable' : (item.viewable ? 'view/read-only' : 'binary/read-only'))}</td>
@@ -1374,10 +1575,58 @@ class GravCommanderPage extends HTMLElement {
                   ${/\.zip$/i.test(file.name || file.path || '') ? '<button id="gc-extract">Extract ZIP</button>' : ''}
                   <button id="gc-backup-file">Backup this file</button>
                 </div>
+                ${jarvisEligible ? `
+                <section class="gc-jarvis" aria-label="Jarvis file assistant">
+                  <div class="gc-jarvis-head">
+                    <div><h3>✨ Jarvis</h3><p>Optional, provider-neutral help for this bounded file buffer. Jarvis never saves the file.</p></div>
+                    <span class="gc-badge">${this.escape(jarvisStatus.state || 'available')}</span>
+                  </div>
+                  <div class="gc-jarvis-controls">
+                    <label>Provider
+                      <select id="gc-jarvis-provider" aria-label="Jarvis provider">
+                        ${jarvisProviders.map(provider => `<option value="${this.escape(provider.id)}" ${provider.id === jarvisProvider ? 'selected' : ''}>${this.escape(provider.id)}</option>`).join('')}
+                      </select>
+                    </label>
+                    <label>Model
+                      <select id="gc-jarvis-model" aria-label="Jarvis model">
+                        <option value="">Provider default</option>
+                        ${jarvisModels.map(model => `<option value="${this.escape(model.id)}" ${model.id === jarvisModel ? 'selected' : ''}>${this.escape(model.label || model.id)}</option>`).join('')}
+                      </select>
+                    </label>
+                    <label>Action
+                      <select id="gc-jarvis-action" aria-label="Jarvis action">
+                        ${jarvisActions.map(action => `<option value="${this.escape(action.id)}" ${action.id === jarvisAction ? 'selected' : ''}>${this.escape(action.label)}</option>`).join('')}
+                      </select>
+                    </label>
+                    <div class="gc-tools"><button id="gc-jarvis-load-models" type="button">Load models</button><button id="gc-jarvis-validate" type="button">Check provider</button></div>
+                  </div>
+                  ${jarvisAction === 'custom' ? `<label class="gc-field"><span>Custom instruction</span><textarea id="gc-jarvis-custom" class="gc-jarvis-custom" maxlength="4000" aria-label="Custom Jarvis instruction" placeholder="Describe what Jarvis should do with this file…">${this.escape(jarvisCustomInstruction)}</textarea></label>` : ''}
+                  <div class="gc-tools"><button id="gc-jarvis-run" class="primary" type="button" ${jarvisBusy ? 'disabled' : ''}>${jarvisBusy ? 'Working…' : 'Run Jarvis action'}</button></div>
+                  ${jarvisMessage ? `<div class="gc-jarvis-status" role="status">${this.escape(jarvisMessage)}</div>` : ''}
+                  ${jarvisError ? `<div class="gc-jarvis-status error" role="alert">${this.escape(jarvisError)}</div>` : ''}
+                  ${jarvisProposal ? `
+                    <div class="gc-jarvis-result">
+                      <div class="gc-jarvis-meta">
+                        <span class="gc-badge">${this.escape(jarvisProposal.provider_id || jarvisProvider)}</span>
+                        <span class="gc-badge">${this.escape(jarvisProposal.model || 'provider default')}</span>
+                        ${jarvisProposal.context?.truncated ? '<span class="gc-badge">truncated context</span>' : ''}
+                        ${jarvisProposal.context?.chunked ? '<span class="gc-badge">bounded chunks</span>' : ''}
+                        ${jarvisProposal.context?.redacted ? `<span class="gc-badge">${this.escape(jarvisProposal.context.redaction_count)} redaction(s)</span>` : ''}
+                      </div>
+                      ${jarvisProposal.mode === 'proposal' ? `<div class="gc-jarvis-diff"><section><strong>Current unsaved buffer</strong><pre>${this.escape(file.content || '')}</pre></section><section><strong>Proposed buffer</strong><pre>${this.escape(jarvisProposal.output || '')}</pre></section></div>` : `<pre>${this.escape(jarvisProposal.output || '')}</pre>`}
+                      <div class="gc-jarvis-meta">${this.escape(this.jarvisUsageText(jarvisProposal))}</div>
+                      <div class="gc-tools">
+                        ${jarvisProposal.context?.accept_allowed && jarvisProposal.proposal_id ? '<button id="gc-jarvis-accept" class="primary" type="button">Apply to unsaved editor</button>' : ''}
+                        <button id="gc-jarvis-copy" type="button">Copy result</button>
+                        <button id="gc-jarvis-discard" type="button">Reject / dismiss</button>
+                      </div>
+                      ${jarvisProposal.mode === 'proposal' && !jarvisProposal.context?.accept_allowed ? '<div class="gc-footer-note">Apply is unavailable for read-only, truncated, redacted, or oversized proposals. Copy remains available.</div>' : ''}
+                    </div>` : ''}
+                </section>` : ''}
                 ${file.editable ? '' : '<div class="gc-footer-note">This file is viewable but not editable. Add its extension to editable_extensions, confirm the root is writable, and make sure the file itself is writable if you really want to edit it.</div>'}` : selected ? `
                 <div class="gc-empty">
                   <strong>${this.escape(selected.name)}</strong><br>
-                  ${selected.type === 'dir' ? 'Folder selected. Double-click it in the file list to open it.' : (selected.editable ? 'This file is editable. Double-click it or use Open/Edit above.' : (selected.viewable ? 'This file can be viewed read-only. Use View above.' : 'This file is treated as binary/read-only. Use Download if you need a local copy.'))}
+                  ${selected.type === 'dir' ? 'Folder selected. Double-click it or press Enter in the file list to open it.' : (selected.editable ? 'This file is editable. Double-click it or use Open/Edit above.' : (selected.viewable ? 'This file can be viewed read-only. Use View above.' : 'This file is treated as binary/read-only. Use Download if you need a local copy.'))}
                 </div>
                 <div class="gc-tools">
                   ${selected.type !== 'dir' ? `<button type="button" id="gc-open">${selected.editable ? 'Open/Edit' : 'View'}</button><button id="gc-download">Download</button>` : ''}
@@ -1577,6 +1826,14 @@ class GravCommanderPage extends HTMLElement {
       row.addEventListener('click', () => {
         const item = this.state.items[Number(row.dataset.idx)];
         this.setState({ selected: item, file: null });
+        this.shadowRoot.querySelector(`tr[data-idx="${Number(row.dataset.idx)}"] .gc-file-entry`)?.focus();
+      });
+      row.addEventListener('keydown', event => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        const item = this.state.items[Number(row.dataset.idx)];
+        if (item.type === 'dir') this.openDir(item.path);
+        else this.openFile(item);
       });
       row.addEventListener('dblclick', () => {
         const item = this.state.items[Number(row.dataset.idx)];
@@ -1599,6 +1856,29 @@ class GravCommanderPage extends HTMLElement {
     this.shadowRoot.querySelectorAll('#gc-zip').forEach(btn => btn.addEventListener('click', () => this.zipSelected()));
     this.shadowRoot.querySelectorAll('#gc-extract').forEach(btn => btn.addEventListener('click', () => this.extractSelected()));
     this.shadowRoot.querySelector('#gc-save')?.addEventListener('click', () => this.saveFile());
+    this.shadowRoot.querySelector('#gc-editor')?.addEventListener('input', event => {
+      // Theme/notice rerenders must retain the unsaved buffer, never save it.
+      if (this.state.file) this.state.file = { ...this.state.file, content: event.target.value };
+    });
+    this.shadowRoot.querySelector('#gc-jarvis-provider')?.addEventListener('change', event => {
+      if (this.state.file) this.state.file = { ...this.state.file, content: this.editorContent() };
+      this.setState({ jarvisProvider: event.target.value, jarvisModels: [], jarvisModel: '', jarvisProposal: null, jarvisMessage: '', jarvisError: '' });
+    });
+    this.shadowRoot.querySelector('#gc-jarvis-model')?.addEventListener('change', event => {
+      if (this.state.file) this.state.file = { ...this.state.file, content: this.editorContent() };
+      this.setState({ jarvisModel: event.target.value, jarvisProposal: null, jarvisMessage: '', jarvisError: '' });
+    });
+    this.shadowRoot.querySelector('#gc-jarvis-action')?.addEventListener('change', event => {
+      if (this.state.file) this.state.file = { ...this.state.file, content: this.editorContent() };
+      this.setState({ jarvisAction: event.target.value, jarvisProposal: null, jarvisMessage: '', jarvisError: '' });
+    });
+    this.shadowRoot.querySelector('#gc-jarvis-custom')?.addEventListener('input', event => { this.state.jarvisCustomInstruction = event.target.value; });
+    this.shadowRoot.querySelector('#gc-jarvis-load-models')?.addEventListener('click', () => this.loadJarvisModels());
+    this.shadowRoot.querySelector('#gc-jarvis-validate')?.addEventListener('click', () => this.validateJarvisProvider());
+    this.shadowRoot.querySelector('#gc-jarvis-run')?.addEventListener('click', () => this.runJarvisAction());
+    this.shadowRoot.querySelector('#gc-jarvis-accept')?.addEventListener('click', () => this.acceptJarvisProposal());
+    this.shadowRoot.querySelector('#gc-jarvis-copy')?.addEventListener('click', () => this.copyJarvisResult());
+    this.shadowRoot.querySelector('#gc-jarvis-discard')?.addEventListener('click', () => this.discardJarvisProposal());
     this.shadowRoot.querySelector('#gc-rename')?.addEventListener('click', () => this.renameSelected());
     this.shadowRoot.querySelector('#gc-copy')?.addEventListener('click', () => this.copyOrMoveSelected('copy'));
     this.shadowRoot.querySelector('#gc-move')?.addEventListener('click', () => this.copyOrMoveSelected('move'));

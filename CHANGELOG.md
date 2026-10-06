@@ -1,3 +1,35 @@
+
+
+## 0.3.15 — 2026-10-05
+
+- Standardize ordinary Grav blueprint keywords for package search and shared repository Topics.
+- Metadata-only patch; package functionality is unchanged.
+
+## 0.3.14 — 2026-10-05
+
+- Prepared a new immutable CGPM release with explicit publisher association and versioned artifact naming.
+- No intentional runtime behavior changes.
+## 0.3.13 - 2026-10-03
+
+- Preserve unsaved raw-editor text across appearance changes and notice rerenders.
+
+- Make file selection keyboard accessible and label the root/path controls.
+
+- Use API 1.0.44 permission enforcement, including scoped API keys, inherited group grants, and API super authority. Legacy `admin.super` alone no longer grants API operations.
+# v0.3.12
+## 08/30/2026
+
+1. [](#new)
+    * Added optional Jarvis actions for eligible text files: Explain, Summarize, Review, Improve / Rewrite, and Custom Prompt.
+    * Added provider-neutral validation/model discovery, bounded context provenance, usage/cost/retry/cache reporting, and before/proposed review inside Admin2.
+    * Added hash-only one-time receipts for applying safe proposals to the current unsaved editor buffer.
+2. [](#improved)
+    * Commander now degrades cleanly when Jarvis, a provider, credential, capability, or budget is unavailable.
+    * Sensitive file locations, private-key material, binary content, unsafe partial rewrites, and secret-bearing assignments fail closed or are redacted before Jarvis receives context.
+    * Jarvis actions require both Commander operation permission and `grav-jarvis.use`; all provider reliability behavior stays behind Jarvis public contracts.
+3. [](#security)
+    * Apply is actor/file/source/proposal/version bound, expires after 15 minutes, works once, and never writes the filesystem. The existing Save file action remains the only editor persistence path.
+
 # v0.3.11
 ## 05/17/2026
 

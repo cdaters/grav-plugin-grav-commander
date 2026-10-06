@@ -234,7 +234,7 @@ class FileService
         }
 
         return [
-            'plugin_version' => '0.3.10',
+            'plugin_version' => '0.3.14',
             'backup' => [
                 'enabled' => $backupEnabled,
                 'path' => $backupPath,
@@ -704,7 +704,7 @@ class FileService
 
         $meta = [
             'plugin' => 'grav-commander',
-            'version' => '0.3.10',
+            'version' => '0.3.14',
             'scope' => 'file',
             'reason' => $reason,
             'root' => $root,
@@ -743,7 +743,7 @@ class FileService
 
         $meta = [
             'plugin' => 'grav-commander',
-            'version' => '0.3.10',
+            'version' => '0.3.14',
             'scope' => 'site',
             'reason' => $reason,
             'profile' => $profileKey,
@@ -1390,7 +1390,7 @@ class FileService
             '[REASON]' => $reasonSlug,
             '[ROOT]' => $rootSlug,
             '[PATH]' => $pathSlug,
-            '[VERSION]' => $this->safeFilenamePart('0.3.10', 'version'),
+            '[VERSION]' => $this->safeFilenamePart('0.3.14', 'version'),
             '[RANDOM]' => bin2hex(random_bytes(8)),
         ];
 

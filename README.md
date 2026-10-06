@@ -1,5 +1,8 @@
 # Grav Commander
 
+Release 0.3.15 updates standard Grav blueprint keywords for discovery.
+Package functionality is unchanged from 0.3.14.
+
 Grav Commander is an Admin2-first file manager, archive toolkit, and guarded Backup Center for Grav 2.
 
 It is intentionally cautious. Grav Commander is meant to help trusted administrators handle common file, ZIP, and backup work from inside Admin2 without turning Grav into an unchecked hosting control panel.
@@ -51,6 +54,8 @@ Grav Commander is alpha software for Grav 2 and Admin2. Use it locally or on sta
 - Backup notes, manifests, health checks, details modal, download, delete, and guarded restore.
 - Scheduled backup definitions mirrored into Grav scheduler custom jobs.
 - CLI backup command for cron, SSH, or scheduled workflows.
+- Optional Jarvis assistance for bounded eligible text files, with provider/
+  model discovery, explicit preview, and unsaved-buffer-only Apply.
 
 ## Requirements
 
@@ -115,6 +120,11 @@ allow_php_editing: false
 allow_recursive_delete: false
 auto_backup_on_write: true
 
+jarvis:
+  enabled: true
+  max_context_bytes: 49152
+  max_large_context_bytes: 196608
+
 backup:
   enabled: true
   path: ../gcmdr_backups
@@ -171,6 +181,57 @@ blocked_extensions:
 Do not remove risky extensions from `blocked_extensions` on production sites unless every Admin user with access is fully trusted.
 
 Markdown files under the Pages root can be opened in Grav's page editor. Raw text editing remains available for power users.
+
+## Optional Jarvis actions
+
+When `grav-jarvis` is installed and enabled, Commander 0.3.12 can consume its
+public PHP service for one bounded file at a time. Jarvis is optional: removing,
+disabling, or misconfiguring it hides or fails only the Jarvis panel. Browsing,
+editing, archives, backups, and every other Commander feature continue to work.
+
+Eligible text/source files receive these actions:
+
+- Explain, Summarize, and Review return read-only results.
+- Improve / Rewrite and Custom Prompt may return a complete proposal when the
+  file is editable and the source was neither truncated nor redacted.
+- Markdown Summarize may use Jarvis's public bounded chunk/synthesis contract.
+  Explain and Review visibly truncate above the direct-context limit. Improve
+  and Custom Prompt reject partial-file rewriting.
+
+The panel lets the user select a registered text provider, use its configured
+default model or discover a neutral model catalog, validate configuration
+without generation, run an action, inspect context limits and normalized
+usage/cost/retry/cache information, then Copy, Reject, or explicitly Apply.
+Browser requests cannot select a provider class, endpoint, header, credential,
+or environment-variable name.
+
+Apply means **apply to the current unsaved Commander editor buffer**. It does
+not call the write endpoint. A hash-only 15-minute receipt binds the actor,
+configured root, relative path, disk modified/size version, source buffer, and
+proposal. Cross-user, cross-file, changed-source, changed-disk, expired,
+rejected, and replayed application fails closed. The normal **Save file**
+button remains the only way to persist that buffer and retains Commander's
+existing write permission and safety-backup behavior.
+
+Both permission families are mandatory on the backend:
+
+- Explain, Summarize, Review, provider validation, and model discovery require
+  `grav-commander.browse` plus `grav-jarvis.use`.
+- Improve / Rewrite, Custom Prompt, and Apply additionally require
+  `grav-commander.write`.
+
+Commander reuses only `Grav\Plugin\GravJarvis\Contracts` and
+`$grav['gravJarvis']`. It does not read Jarvis configuration, credentials,
+providers, transport, cache, retry, budget, chunking implementation, Admin
+services, or test fixtures.
+
+The disclosure policy is deliberately conservative. `.env` files, account/
+credential/secret/private-key locations, private-key bodies, unsupported or
+binary files are refused. High-confidence credential assignments and bearer/
+token values in otherwise eligible text are replaced with `[REDACTED]`, and a
+redacted result can never be applied. This bounded policy is a guardrail, not a
+general secret scanner; operators should still review the visible context and
+avoid sending sensitive files to any provider.
 
 ## Archive Tools
 
@@ -284,6 +345,10 @@ Scheduled backup jobs use the same command internally.
 - Keep full-site restore disabled unless actively needed.
 - Test restores on staging before relying on production recovery.
 - Backup download links use short-lived, one-time tokens requested by an authenticated Admin2 session, then stream through a token-only browser download route.
+- Jarvis is optional and receives only the current bounded eligible buffer
+  after backend containment, sensitivity, permission, provider-validation, and
+  capability checks. Provider credentials remain environment-only in Jarvis.
+- Jarvis output is untrusted text. Review it before Apply and again before Save.
 - Basic `.htaccess` protection helps Apache, but Nginx, Caddy, and other servers need server-level rules if backups are exposed under the web root.
 
 ## Known Limitations
@@ -295,6 +360,12 @@ Scheduled backup jobs use the same command internally.
 - Scheduler jobs require host cron; saving a schedule alone is not enough.
 - Full-site restore is intentionally guarded and should be considered a recovery tool, not a deployment system.
   Large backup downloads stream through a tokenized browser route so the browser can handle the ZIP directly without loading the full archive into Admin2 JavaScript memory.
+- Jarvis does not analyze directories, binary/media contents, multiple files,
+  selections, or site-wide context. It has no autonomous file write, job, MCP,
+  or background workflow in Commander.
+- Commander 0.3.12 protects proposal Apply from an externally changed file
+  version. The existing ordinary Save endpoint predates this integration and
+  does not yet provide general optimistic-concurrency conflict detection.
 
 ## Roadmap Link
 
@@ -313,3 +384,12 @@ Grav Commander is maintained by Craig Daters. PixelWizard may appear in communit
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Current API authorization
+
+API/Admin2 operations require API plugin **1.0.44 or newer**. The API permission resolver enforces API-key scopes, group grants and demo restrictions. Grant the documented plugin permissions plus `api.access`, or use `api.super` for a trusted API administrator. Legacy `admin.super` alone is not API authority. Keep API keys narrowly scoped; no permission bypass is provided by this plugin.
+
+## CGPM release 0.3.14
+
+This candidate uses a fresh version for immutable CGPM distribution. Existing unmanaged
+installations are not adopted. Review testing artifacts before stable promotion.

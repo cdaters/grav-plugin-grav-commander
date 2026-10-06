@@ -15,6 +15,22 @@ This roadmap is directional, not a promise list. Priorities may shift as Grav 2,
 - Keep raw editing available for trusted power users.
 - Explore a focused embedded code editor for arbitrary text-like files.
 - Avoid turning the file manager into a general IDE.
+- Keep the optional Jarvis panel bounded to one eligible current file and the
+  public Jarvis service; never make AI a dependency for normal Commander work.
+- Add optimistic-concurrency/version checking to Commander's ordinary Save
+  endpoint before expanding any AI-assisted apply surface.
+
+## Jarvis integration
+
+- Version 0.3.12 implements the first optional public-contract-only consumer:
+  Explain, Summarize, Review, Improve / Rewrite, and Custom Prompt with
+  validation/discovery, safe context filtering, preview, and unsaved-buffer-
+  only Apply.
+- Keep provider credentials, endpoints, retry, cache, budget, cost, and
+  chunking policy inside Jarvis. Commander owns only file eligibility,
+  containment, permissions, proposal review, and its normal Save authority.
+- Defer multi-file, directory, batch, job, MCP, media, selection-aware, and
+  autonomous workflows until their own bounded contracts exist.
 
 ## Backup Direction
 

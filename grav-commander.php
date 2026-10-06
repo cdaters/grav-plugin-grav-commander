@@ -82,6 +82,10 @@ class GravCommanderPlugin extends Plugin
     public function onApiRegisterRoutes(Event $event): void
     {
         require_once __DIR__ . '/classes/Service/FileService.php';
+        require_once __DIR__ . '/classes/Jarvis/JarvisIntegrationException.php';
+        require_once __DIR__ . '/classes/Jarvis/JarvisContextPolicy.php';
+        require_once __DIR__ . '/classes/Jarvis/JarvisProposalStore.php';
+        require_once __DIR__ . '/classes/Jarvis/JarvisIntegrationService.php';
         require_once __DIR__ . '/classes/Controller/ApiController.php';
 
         $routes = $event['routes'];
@@ -123,6 +127,13 @@ class GravCommanderPlugin extends Plugin
             $group->get('/backups/{name}/download', [$controller, 'downloadBackup']);
             $group->post('/restore', [$controller, 'restore']);
             $group->delete('/backups/{name}', [$controller, 'deleteBackup']);
+
+            $group->get('/jarvis/status', [$controller, 'jarvisStatus']);
+            $group->get('/jarvis/providers/{id}/models', [$controller, 'jarvisModels']);
+            $group->post('/jarvis/providers/{id}/validate', [$controller, 'jarvisValidate']);
+            $group->post('/jarvis/proposals', [$controller, 'jarvisPropose']);
+            $group->post('/jarvis/proposals/{id}/accept', [$controller, 'jarvisAccept']);
+            $group->post('/jarvis/proposals/{id}/discard', [$controller, 'jarvisDiscard']);
         });
     }
 

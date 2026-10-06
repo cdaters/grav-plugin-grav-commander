@@ -35,8 +35,19 @@ items, Cmd/Ctrl+C/X records copy/move intent, and Cmd/Ctrl+V operates in the foc
 pane. F6 switches panes; Cmd/Ctrl+S saves an editable buffer; Escape cancels dialogs
 or closes the editor with dirty protection. Text inputs keep ordinary editing keys.
 
-Operations never overwrite a collision. The entire selection is checked before
-mutation, including duplicate/overlapping paths and recursive-delete policy. Defaults
+Copy/move defaults to **Ask** when a destination exists. Choose **Skip**, **Replace**,
+**Keep both / Rename**, or **Cancel**, with an option to apply the choice to remaining
+compatible collisions. Cancel stops the entire transfer before mutation. Keep both
+accepts a new name or generates a unique one. **Merge folders** retains destination-only
+items and reviews child collisions; **Replace** replaces the whole destination and
+requires recursive deletion to be enabled for nonempty folders. Skipped move items
+remain at the source. Replacement first stages the source and makes a safety backup
+when `auto_backup_on_write` and `backup.enabled` are enabled. Backup filenames cannot
+reuse an existing archive, including multiple backups in the same second.
+
+The entire selection is checked before mutation, including duplicate/overlapping paths
+and recursive-delete policy. Decisions are bound to source/destination revisions;
+changes while reviewing a collision require a fresh review. Nothing silently overwrites. Defaults
 limit a request to 200 selected paths, 10,000 descendants and 512 MiB; advanced
 configuration keys are `max_operation_files` and `max_operation_bytes`. Split larger
 work into smaller operations. Paths stay inside configured roots; symlinks, special
@@ -53,7 +64,15 @@ No persistent/background job queue is claimed.
 
 Grav-aware labels identify page folders/media, plugin/theme package contents and
 configuration. Markdown beneath the actual `user/pages` tree offers **Open in Grav
-Editor** as well as **Edit Raw**, even through a custom root alias. Commander does
+Editor** as the primary action (also Enter/double-click), as well as **Edit Raw**, even
+through a custom root alias. Edit Raw opens, scrolls to and focuses the pinned editor
+without resetting either pane. Ordinary Markdown uses the Markdown source editor;
+Admin2 2.1.27 has no public standalone Markdown-buffer editor contract, so Commander
+does not import its private page-editor components. YAML/JSON/Twig/CSS/JS and other
+allowed text use the raw code/text editor. Validation and stale-save checks remain.
+App-owned prompts and confirmations use themed, keyboard-accessible Commander dialogs
+with focus trapping, Escape and return focus. Browser tab/window unload protection
+still uses the browser's required native before-unload mechanism. Commander does
 not rewrite page links, route overrides, plugin registrations or theme dependencies
 when files move. Review those site relationships before moving package/page folders.
 
@@ -216,7 +235,30 @@ Super admin users should have access automatically. For non-super users, grant o
 
 ## File Manager Behavior
 
-Configured roots are defined under `roots` in `grav-commander.yaml`. Each root has a label, path, and writable flag. Paths are resolved from the Grav root unless they are absolute.
+Configured roots are defined under `roots` in site plugin configuration. The Admin2
+plugin settings also expose **Additional or overridden filesystem roots** (`additional_roots`):
+
+```yaml
+additional_roots:
+  - key: server-home
+    label: Server home
+    path: /home/datersne
+    writable: false
+```
+
+An additional entry with a built-in key overrides that root. Additional keys must be
+unique. Paths may be site-relative or absolute; directories must already exist and
+be accessible to PHP. Enable writes only for roots administrators intend to modify.
+Each pane chooses independently from this configured allowlist. Invalid roots are
+unavailable. Root paths are canonicalized; a full filesystem root, symlink root,
+unknown root, absolute request path, traversal, symlink descendant or special file
+is rejected. A server-home root does not permit navigating to its parent.
+
+When Site Safeguard is installed, enabled and its public status endpoint authorizes
+the current user, Backup Center presents **Open Site Safeguard** as the preferred
+advanced backup/stage/restore workflow. This opens its native Admin2 page; Safeguard
+retains its own permissions, staging and confirmation gates. Commander imports no
+Safeguard internals and its existing backups remain functional without Safeguard.
 
 Files are handled in three broad modes:
 

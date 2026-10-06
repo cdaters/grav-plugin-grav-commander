@@ -27,13 +27,15 @@ class FileService
     {
         $roots = [];
         foreach ($this->configuredRoots() as $key => $root) {
-            $base = $this->absoluteConfiguredPath((string) ($root['path'] ?? ''));
+            try { $base = $this->rootBase((string) $key); $error = ''; }
+            catch (\Throwable $e) { $base = ''; $error = $e->getMessage(); }
             $roots[] = [
                 'key' => $key,
                 'label' => $root['label'] ?? ucfirst($key),
                 'path' => $root['path'] ?? '',
                 'writable' => (bool) ($root['writable'] ?? false),
-                'exists' => is_dir($base),
+                'exists' => $base !== '',
+                'error' => $error,
             ];
         }
 
@@ -235,6 +237,10 @@ class FileService
 
         return [
             'plugin_version' => '0.4.0',
+            'integrations' => ['site_safeguard' => [
+                'installed' => (bool) $this->grav['locator']->findResource('plugins://site-safeguard/blueprints.yaml', true),
+                'enabled' => (bool) $this->grav['config']->get('plugins.site-safeguard.enabled', false),
+            ]],
             'backup' => [
                 'enabled' => $backupEnabled,
                 'path' => $backupPath,
@@ -526,6 +532,7 @@ class FileService
     public function operate(array $body): array
     {
         $operation = (string) ($body['operation'] ?? '');
+        if (in_array($operation, ['copy', 'move'], true)) return $this->transfer($body);
         if (!in_array($operation, ['copy', 'move', 'delete', 'zip'], true)) throw new ValidationException('Unknown operation.');
         $paths = $body['paths'] ?? null;
         if (!is_array($paths) || !$paths || count($paths) > 200) throw new ValidationException('Select between 1 and 200 items.');
@@ -593,6 +600,163 @@ class FileService
             }
             return ['message' => count($completed) . ' of ' . count($tasks) . ' items completed.', 'completed' => $completed, 'failed' => $failed, 'pending' => array_slice($paths, count($completed) + count($failed))];
         } finally { flock($lock, LOCK_UN); fclose($lock); }
+    }
+
+    /** Build the entire transfer before mutation. Revision binds user decisions to
+     * source/destination bytes, including folder descendants and reserved new names. */
+    private function transfer(array $body): array
+    {
+        $operation = (string) $body['operation'];
+        $root = (string) ($body['root'] ?? '');
+        $destRoot = (string) ($body['dest_root'] ?? '');
+        $destPath = $this->sanitizeRelative((string) ($body['dest_path'] ?? ''));
+        $paths = $body['paths'] ?? null;
+        if (!is_array($paths) || !$paths || count($paths) > 200) throw new ValidationException('Select between 1 and 200 items.');
+        $policy = (string) ($body['collision_policy'] ?? 'ask');
+        if (!in_array($policy, ['ask', 'skip', 'replace', 'keep_both', 'merge', 'cancel'], true)) throw new ValidationException('Unknown collision policy.');
+        if ($policy === 'cancel') return ['cancelled' => true, 'completed' => [], 'message' => 'Transfer cancelled.'];
+        $resolutions = $body['resolutions'] ?? [];
+        if (!is_array($resolutions) || count($resolutions) > 10000) throw new ValidationException('Invalid collision decisions.');
+        $this->assertRootWritable($destRoot);
+        if ($operation === 'move') $this->assertRootWritable($root);
+        $dest = $this->resolve($destRoot, $destPath, true);
+        if (!is_dir($dest)) throw new ValidationException('Destination must be an existing folder.');
+        $lock = fopen(sys_get_temp_dir() . '/grav-commander-' . hash('sha256', $this->root) . '.lock', 'c');
+        if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) throw new ValidationException('Another Commander batch is running.');
+        try {
+            $tasks = []; $collisions = []; $reserved = []; $seen = []; $stamps = [];
+            $count = 0; $bytes = 0;
+            foreach ($paths as $path) {
+                if (!is_string($path) || $this->sanitizeRelative($path) === '') throw new ValidationException('Invalid selected path.');
+                $path = $this->sanitizeRelative($path);
+                $src = $this->resolve($root, $path, true);
+                foreach ($seen as $other) {
+                    if ($src === $other || str_starts_with($src . '/', $other . '/') || str_starts_with($other . '/', $src . '/')) throw new ValidationException('Selection contains duplicate or overlapping paths.');
+                }
+                $seen[] = $src;
+                $this->inspectTree($src, $count, $bytes);
+                $stamps['source:' . $path] = $this->treeRevision($src);
+                $to = $this->joinRelative($destPath, basename($src));
+                $target = $this->resolve($destRoot, $to, false);
+                if ($src === $target || str_starts_with($target . '/', $src . '/') || str_starts_with($src . '/', $target . '/')) throw new ValidationException('Source and destination cannot overlap.');
+                if (file_exists($target)) $this->inspectTree($target, $count, $bytes);
+                $stamps['destination:' . $to] = $this->treeRevision($target);
+                $this->planTransfer($root, $path, $destRoot, $to, $policy, $resolutions, $tasks, $collisions, $reserved);
+            }
+            $snapshot = hash('sha256', json_encode([$operation, $root, $destRoot, $destPath, $stamps], JSON_THROW_ON_ERROR));
+            if (isset($body['snapshot']) && !hash_equals($snapshot, (string) $body['snapshot'])) throw new ValidationException('Files changed while collision decisions were open. Review the transfer again.');
+            foreach ($tasks as $task) {
+                $target = $this->resolve($destRoot, $task['to'], false);
+                foreach ($seen as $source) {
+                    if ($target === $source || str_starts_with($target . '/', $source . '/') || str_starts_with($source . '/', $target . '/')) throw new ValidationException('A destination overlaps the selected source tree.');
+                }
+                if ($task['action'] !== 'skip') $stamps['target:' . $task['to']] = $this->treeRevision($this->resolve($destRoot, $task['to'], false));
+            }
+            $revision = hash('sha256', json_encode([$operation, $root, $destRoot, $stamps, $tasks], JSON_THROW_ON_ERROR));
+            if (!empty($body['preview']) || $collisions) return ['snapshot' => $snapshot, 'revision' => $revision, 'collisions' => $collisions, 'ready' => !$collisions, 'message' => $collisions ? 'Choose how to handle existing destinations.' : 'Transfer plan ready.'];
+            $destructive = (bool) array_filter($tasks, static fn(array $task): bool => $task['action'] === 'replace');
+            if (($destructive || isset($body['revision'])) && !hash_equals($revision, (string) ($body['revision'] ?? ''))) throw new ValidationException('Files changed since the transfer was reviewed. Review the transfer again.');
+            $completed = []; $skipped = []; $failed = []; $retained = [];
+            foreach ($tasks as $index => $task) {
+                try {
+                    if ($task['action'] === 'skip') { $skipped[] = $task['path']; continue; }
+                    if ($task['action'] === 'merge_end') {
+                        if ($operation === 'move') {
+                            $src = $this->resolve($root, $task['path'], true);
+                            if ($this->isDirectoryEmpty($src)) { if (!rmdir($src)) throw new ValidationException('Unable to remove empty source folder.'); }
+                            else $retained[] = $task['path'];
+                        }
+                        continue;
+                    }
+                    if ($task['action'] === 'replace') $this->replaceTransfer($operation, $root, $task['path'], $destRoot, $task['to']);
+                    else $this->$operation($root, $task['path'], $destRoot, $task['to']);
+                    $completed[] = ['path' => $task['path'], 'destination' => $task['to']];
+                } catch (\Throwable $e) { $failed[] = ['path' => $task['path'], 'message' => $e->getMessage()]; break; }
+            }
+            return ['message' => count($completed) . ' transferred; ' . count($skipped) . ' skipped.', 'completed' => $completed, 'skipped' => $skipped, 'retained_folders' => $retained, 'failed' => $failed, 'pending' => $failed ? array_column(array_slice($tasks, $index + 1), 'path') : []];
+        } finally { flock($lock, LOCK_UN); fclose($lock); }
+    }
+
+    private function treeRevision(string $path): string
+    {
+        if (is_link($path)) throw new ForbiddenException('Symlinks are not supported.');
+        if (!file_exists($path)) return 'missing';
+        if (is_file($path)) return hash('sha256', 'file:' . fileperms($path) . ':' . hash_file('sha256', $path));
+        if (!is_dir($path)) throw new ForbiddenException('Special files are not supported.');
+        $hash = hash_init('sha256');
+        hash_update($hash, 'directory:' . fileperms($path));
+        foreach (scandir($path) ?: [] as $entry) {
+            if ($entry !== '.' && $entry !== '..') hash_update($hash, $entry . "\0" . $this->treeRevision($path . '/' . $entry));
+        }
+        return hash_final($hash);
+    }
+
+    private function planTransfer(string $root, string $path, string $destRoot, string $to, string $policy, array $resolutions, array &$tasks, array &$collisions, array &$reserved): void
+    {
+        $src = $this->resolve($root, $path, true);
+        $target = $this->resolve($destRoot, $to, false);
+        $action = 'transfer';
+        if (file_exists($target)) {
+            $choice = $resolutions[$to] ?? ['action' => $policy];
+            if (!is_array($choice)) throw new ValidationException('Invalid collision decision.');
+            $action = (string) ($choice['action'] ?? 'ask');
+            $merge = is_dir($src) && is_dir($target);
+            $replace = !is_dir($target) || $this->isDirectoryEmpty($target) || ($this->config['allow_recursive_delete'] ?? false);
+            if ($action === 'ask' || ($action === 'merge' && !$merge) || ($action === 'replace' && !$replace)) {
+                $collisions[] = ['path' => $path, 'dest_path' => $to, 'source_type' => is_dir($src) ? 'folder' : 'file', 'dest_type' => is_dir($target) ? 'folder' : 'file', 'merge_allowed' => $merge, 'replace_allowed' => $replace];
+                return;
+            }
+            if ($action === 'merge') {
+                foreach (scandir($src) ?: [] as $entry) {
+                    if ($entry !== '.' && $entry !== '..') $this->planTransfer($root, $this->joinRelative($path, $entry), $destRoot, $this->joinRelative($to, $entry), $policy, $resolutions, $tasks, $collisions, $reserved);
+                }
+                $tasks[] = ['action' => 'merge_end', 'path' => $path, 'to' => $to];
+                return;
+            }
+            if ($action === 'keep_both') {
+                $name = (string) ($choice['name'] ?? '');
+                $parent = $this->parentRelative($to);
+                if ($name !== '') {
+                    if ($name !== $this->sanitizeName($name)) throw new ValidationException('Use a single filename for Keep both.');
+                    $to = $this->joinRelative($parent, $name);
+                    if (file_exists($this->resolve($destRoot, $to, false)) || isset($reserved[$to])) throw new ValidationException('The chosen Keep both name already exists.');
+                } else {
+                    $base = basename($to); $ext = is_file($src) ? pathinfo($base, PATHINFO_EXTENSION) : '';
+                    $stem = $ext === '' ? $base : substr($base, 0, -strlen($ext) - 1);
+                    for ($n = 2; $n <= 10000; $n++) {
+                        $to = $this->joinRelative($parent, $stem . ' (copy ' . $n . ')' . ($ext === '' ? '' : '.' . $ext));
+                        if (!file_exists($this->resolve($destRoot, $to, false)) && !isset($reserved[$to])) break;
+                    }
+                    if ($n > 10000) throw new ValidationException('No free Keep both filename found.');
+                }
+                $action = 'transfer';
+            } elseif (!in_array($action, ['skip', 'replace'], true)) throw new ValidationException('Unknown collision decision.');
+        }
+        if (isset($reserved[$to])) throw new ValidationException('Selected items have conflicting destination names.');
+        $reserved[$to] = true;
+        $tasks[] = ['action' => $action, 'path' => $path, 'to' => $to];
+    }
+
+    private function replaceTransfer(string $operation, string $root, string $path, string $destRoot, string $to): void
+    {
+        $src = $this->operationSource($root, $path);
+        $target = $this->resolve($destRoot, $to, true);
+        $stage = dirname($target) . '/.commander-copy-' . bin2hex(random_bytes(10));
+        $previous = dirname($target) . '/.commander-previous-' . bin2hex(random_bytes(10));
+        try {
+            $this->copyRecursive($src, $stage);
+            if ($this->autoBackup()) {
+                $this->backupPath($destRoot, $to, 'pre-replace');
+                if ($operation === 'move') $this->backupPath($root, $path, 'pre-move');
+            }
+            if (!rename($target, $previous)) throw new ValidationException('Unable to preserve the existing destination.');
+            if (!rename($stage, $target)) {
+                if (!rename($previous, $target)) throw new ValidationException('Promotion failed. Previous destination is preserved as ' . basename($previous));
+                throw new ValidationException('Promotion failed; original destination restored.');
+            }
+            $this->deletePath($previous);
+            if ($operation === 'move') $this->deletePath($src);
+        } finally { if (file_exists($stage)) $this->deletePath($stage); }
     }
 
     public function mkdir(string $root, string $path, string $name): array
@@ -920,7 +1084,7 @@ class FileService
         ];
         $zip->addFromString('backup-info.json', json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         $this->addPathToZip($zip, $abs, 'payload/' . basename($abs));
-        $zip->close();
+        if (!$zip->close()) throw new ValidationException('Backup could not be finalized; operation stopped.');
         $this->pruneBackups();
 
         return $this->backupInfo($zipPath);
@@ -968,7 +1132,7 @@ class FileService
             'exclude_prefixes' => $this->siteExcludePrefixes($profileKey),
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
-        $zip->close();
+        if (!$zip->close()) throw new ValidationException('Backup could not be finalized; operation stopped.');
         $this->pruneBackups();
 
         return $this->backupInfo($zipPath);
@@ -1276,7 +1440,17 @@ class FileService
     private function configuredRoots(): array
     {
         $roots = $this->config['roots'] ?? [];
-        return is_array($roots) ? $roots : [];
+        $roots = is_array($roots) ? $roots : [];
+        $seen = [];
+        foreach ((array) ($this->config['additional_roots'] ?? []) as $definition) {
+            if (!is_array($definition) || !preg_match('/^[a-z][a-z0-9_-]{0,63}$/D', (string) ($definition['key'] ?? ''))) {
+                throw new ValidationException('Each configured root needs a unique lowercase key.');
+            }
+            if (isset($seen[$definition['key']])) throw new ValidationException('Additional root keys must be unique.');
+            $seen[$definition['key']] = true;
+            $roots[$definition['key']] = $definition;
+        }
+        return $roots;
     }
 
     private function rootDefinition(string $root): array
@@ -1291,11 +1465,16 @@ class FileService
     private function rootBase(string $root): string
     {
         $def = $this->rootDefinition($root);
-        $base = $this->absoluteConfiguredPath((string) ($def['path'] ?? ''));
+        $path = (string) ($def['path'] ?? '');
+        if (trim($path) === '' || str_contains($path, "\0") || str_contains($path, '://')) throw new ValidationException('Configured roots require an explicit filesystem path.');
+        $base = $this->absoluteConfiguredPath($path);
+        if (is_link($base)) throw new ForbiddenException('A configured root cannot be a symlink.');
         if (!is_dir($base)) {
             throw new NotFoundException('Configured root does not exist.');
         }
-        return realpath($base) ?: $base;
+        $canonical = realpath($base);
+        if (!$canonical || $canonical === '/' || preg_match('/^[A-Za-z]:[\\\\\/]*$/D', $canonical)) throw new ForbiddenException('An unrestricted filesystem root is not allowed.');
+        return rtrim($canonical, '/');
     }
 
     private function absoluteConfiguredPath(string $path): string
@@ -1383,7 +1562,8 @@ class FileService
 
     private function sanitizeRelative(string $path): string
     {
-        $path = str_replace("\0", '', str_replace('\\', '/', $path));
+        if (str_contains($path, "\0") || preg_match('#^(?:[/\\\\]|[A-Za-z]:)#', $path)) throw new ForbiddenException('Use a relative path inside a configured root.');
+        $path = str_replace('\\', '/', $path);
         $path = trim($path, '/');
         if ($path === '') {
             return '';
@@ -1628,6 +1808,7 @@ class FileService
             $name = 'gcmdr-backup-' . date('Ymd-His');
         }
 
+        if (file_exists($this->backupDir() . '/' . $name . '.zip')) $name .= '-' . bin2hex(random_bytes(8));
         return $name . '.zip';
     }
 
@@ -1678,7 +1859,7 @@ class FileService
     {
         $this->assertBackupEnabled();
         $zip = new ZipArchive();
-        if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+        if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::EXCL) !== true) {
             throw new ValidationException('Unable to create backup zip.');
         }
         return $zip;

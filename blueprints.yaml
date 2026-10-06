@@ -81,6 +81,38 @@ form:
         min: 4096
         max: 2097152
 
+    additional_roots:
+      type: list
+      label: Additional or overridden filesystem roots
+      help: 'Administrator-only paths. Use a site-relative directory or an existing absolute directory such as /home/datersne. Reusing a built-in key overrides it. Full filesystem roots and symlink roots are rejected. Read-only is the default.'
+      fields:
+        .key:
+          type: text
+          label: Root key
+          placeholder: server-home
+          validate:
+            required: true
+            pattern: '^[a-z][a-z0-9_-]{0,63}$'
+        .label:
+          type: text
+          label: Display label
+          placeholder: Server home
+        .path:
+          type: text
+          label: Filesystem path
+          placeholder: /home/datersne
+          validate:
+            required: true
+        .writable:
+          type: toggle
+          label: Allow writes
+          default: 0
+          options:
+            1: Yes
+            0: No
+          validate:
+            type: bool
+
     max_upload_size:
       type: number
       label: Max upload size in bytes

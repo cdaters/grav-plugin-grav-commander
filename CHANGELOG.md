@@ -5,7 +5,7 @@
 - Dual-pane workspace with independent roots, paths, breadcrumbs, history, filtering,
   sorting, multi-selection and a responsive source/destination switch.
 - Coordinated bounded copy/move/delete/archive operations preflight every selected
-  item and destination; collisions never overwrite and partial I/O results are explicit.
+  item and destination; collisions require explicit decisions and partial I/O results are explicit.
 - New file creation, folder duplication, image preview, ZIP inspection, keyboard
   selection/clipboard intent, and single-file desktop drop upload.
 - Pinned raw editor retains unsaved changes across pane navigation; guarded close,
@@ -17,6 +17,14 @@
 - Fixed empty-root folder creation and empty-content saves; aligned internal versions
   and Composer keywords. Existing backup/restore and optional Jarvis flows retained.
 
+- RC usability polish: optional Site Safeguard discovery and preferred native advanced
+  workflow; administrator-configured external roots with canonical containment.
+- Raw editor scroll/focus, primary native Grav page editing, accessible themed forms
+  replacing app-owned browser dialogs, and consistent 40px controls in Files/Backups.
+- Planned Ask/Skip/Replace/Keep both-Rename/Cancel, apply-to-remaining and explicit folder
+  merge; stale plans are rejected and replacements preserve configured safety backups.
+- Fixed same-second backup filename collisions and require successful archive close
+  before a replacement proceeds. Version remains 0.4.0; no publication in this RC pass.
 
 ## 0.3.15 — 2026-10-05
 

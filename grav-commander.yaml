@@ -27,6 +27,9 @@ archive:
   max_extract_bytes: 209715200
   skip_macos_junk: true
 
+# Optional Admin2-configured external roots (or overrides by key).
+additional_roots: []
+
 roots:
   pages:
     label: Pages

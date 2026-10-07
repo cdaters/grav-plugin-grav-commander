@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Grav\Plugin\GravCommander\Controller;
 
 use Grav\Framework\Psr7\Response;
+use Grav\Plugin\GravCommander\Editor\EditorProviderRegistry;
+use RocketTheme\Toolbox\Event\Event;
 use Grav\Plugin\Api\Controllers\AbstractApiController;
 use Grav\Plugin\Api\Exceptions\ApiException;
 use Grav\Plugin\Api\Exceptions\ValidationException;
@@ -60,7 +62,47 @@ class ApiController extends AbstractApiController
     {
         $this->requireCommanderPermission($request, 'grav-commander.browse');
         $params = $request->getQueryParams();
-        return ApiResponse::create($this->service()->read((string) ($params['root'] ?? 'pages'), (string) ($params['path'] ?? '')));
+        $file = $this->service()->read((string) ($params['root'] ?? 'pages'), (string) ($params['path'] ?? ''));
+        try { $this->requireCommanderPermission($request, 'grav-commander.write'); }
+        catch (ApiException) { $file['editable'] = false; $file['read_only'] = true; }
+        $file['editors'] = $file['editable'] ? $this->editorProviders($request, $file) : [];
+        return ApiResponse::create($file);
+    }
+
+    private function editorProviders(ServerRequestInterface $request, array $file): array
+    {
+        $registry = new EditorProviderRegistry();
+        // Caxton's documented public Admin2 custom field is an optional buffer provider.
+        if ($this->grav['config']->get('plugins.grav-caxton.admin.replace_markdown_fields', true)) {
+            $allowSource = false;
+            try { $this->requirePermission($request, 'grav-caxton.source'); $allowSource = true; } catch (ApiException) {}
+            $registry->register([
+                'id' => 'caxton', 'plugin' => 'grav-caxton', 'field' => 'caxton', 'label' => 'Caxton',
+                'adapter' => 'admin2-field-v1', 'priority' => 100, 'formats' => ['md', 'markdown'],
+                'contexts' => ['grav-page', 'file'], 'permissions' => ['grav-caxton.use'], 'preserves_source' => true,
+                'max_bytes' => min(1048576, (int) $this->grav['config']->get('plugins.grav-caxton.limits.max_source_bytes', 2097152)),
+                'options' => ['caxton' => ['allow_source' => $allowSource, 'allow_jarvis' => false,
+                    'toolbar' => ['undo','redo','heading','bold','italic','strikethrough','inline_code','remove_format','link','blockquote','bullet_list','ordered_list','horizontal_rule','code_block', ...($allowSource ? ['source'] : [])]]],
+            ]);
+        }
+        try { $this->grav->fireEvent('onCommanderEditorProviders', new Event(['registry' => $registry])); }
+        catch (\Throwable) { /* Bad optional registration cannot break the built-in editors. */ }
+        $context = !empty($file['identity']['page_route']) ? 'grav-page' : 'file';
+        $result = [];
+        foreach ($registry->all() as $provider) {
+            if (!in_array($file['extension'], $provider['formats'], true) || !in_array($context, $provider['contexts'], true) || strlen($file['content']) > $provider['max_bytes']) continue;
+            $plugin = $provider['plugin'];
+            if (!$this->grav['config']->get('plugins.' . $plugin . '.enabled', false)) continue;
+            if (!$this->grav['locator']->findResource('plugins://' . $plugin . '/admin-next/fields/' . $provider['field'] . '.js', true)) continue;
+            try {
+                foreach ($provider['permissions'] as $permission) {
+                    if (!is_string($permission) || $permission === '') throw new \InvalidArgumentException('Invalid provider permission.');
+                    $this->requirePermission($request, $permission);
+                }
+            } catch (\Throwable) { continue; }
+            $result[] = array_intersect_key($provider, array_flip(['id','plugin','field','label','adapter','priority','max_bytes','options']));
+        }
+        return $result;
     }
 
     public function download(ServerRequestInterface $request): ResponseInterface

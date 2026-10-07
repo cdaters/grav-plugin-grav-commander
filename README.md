@@ -106,18 +106,29 @@ not a fabricated percentage, and server work cannot be cancelled from the browse
 No persistent/background job queue is claimed.
 
 Grav-aware labels identify page folders/media, plugin/theme package contents and
-configuration. Markdown beneath the actual `user/pages` tree offers **Open in Grav
-Editor** as the primary action (also Enter/double-click), as well as **Edit Raw**, even
-through a custom root alias. Edit Raw opens, scrolls to and focuses the pinned editor
-without resetting either pane. Ordinary Markdown has a primary **Edit Markdown**
-action. Both this and Grav-page **Edit Raw** always show Markdown tools: Undo/Redo,
-H1/H2/H3, emphasis, strikethrough, lists, blockquote, inline/fenced code, link, image,
-horizontal rule, table and Preview. Tools modify the selection in the unsaved buffer;
-Save stays explicit. Cmd/Ctrl+B/I and Cmd/Ctrl+Z/Shift+Z operate in the editor.
-Preview is a sandboxed, network-disabled rendering of Markdown, without Twig or
-Grav page includes; it is not a live site rendering. Commander does not
-import Admin2's private page-editor components or add an editor-plugin abstraction. YAML/JSON/Twig/CSS/JS and other
-allowed text use the raw code/text editor. Validation and stale-save checks remain.
+configuration. **Edit**, Enter and double-click automatically select the highest-priority
+installed, enabled and authorized provider that explicitly supports the format/context.
+Caxton is the preferred built-in optional Markdown provider. Other plugins can register
+public compatible providers; equal priorities sort by ID. There is no editor chooser.
+
+Grav-page Markdown falls back to the native Grav page editor. Ordinary Markdown falls
+back to Commander Markdown tools; YAML/JSON/Twig/CSS/JavaScript/HTML/TXT use an explicitly
+compatible safe provider or Commander source editing. Read-only files remain in Commander.
+Caxton Source mode respects its separate permission. Unsupported or failed providers
+are skipped; runtime failures preserve the acknowledged unsaved buffer locally.
+
+Commander keeps file policy, validation, revision-bound Save, dirty guards, focus/scroll
+and Jarvis context. Providers receive only a canonical unsaved string in an isolated
+iframe, with no filesystem identity, credentials or network access. Loading an editor
+never saves. Native-page fallback retains the normal Admin2 page workflow and ACLs.
+The small [public editor-adapter contract](docs/EDITOR-ADAPTERS.md) uses Admin2's existing
+custom field API without importing private provider components or rebuilding Caxton.
+
+The fallback Markdown toolbar includes Undo/Redo, H1/H2/H3, emphasis, lists, quote,
+inline/fenced code, links/images, rule, table and sandboxed safe preview. Code formats
+keep appropriate source behavior. Jarvis remains the Commander-owned bounded buffer
+workflow; provider-specific page media/AI controls are omitted for arbitrary files.
+
 App-owned prompts and confirmations use themed, keyboard-accessible Commander dialogs
 with focus trapping, Escape and return focus. Browser tab/window unload protection
 still uses the browser's required native before-unload mechanism. Commander does

@@ -39,6 +39,12 @@
 - Unix owner/group/mode display, informational warnings and guarded chmod with bounded
   plans, explicit recursive confirmation and honest partial results. No ownership changes.
 
+- Automatic editor resolution with deterministic capability/priority checks and no
+  editor chooser. Caxton uses its public Admin2 field contract for eligible Markdown;
+  other providers may register the documented v1 adapter. Safe native/source fallbacks.
+- Isolated provider buffers retain Commander validation, revision Save, dirty state,
+  Jarvis, theme and focus handling; failures preserve acknowledged unsaved content.
+
 ## 0.3.15 — 2026-10-05
 
 - Standardize ordinary Grav blueprint keywords for package search and shared repository Topics.

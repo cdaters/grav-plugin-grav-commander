@@ -7,6 +7,18 @@ make backups without leaving the administrator interface.
 Commander is for trusted administrators. Start on a staging site, give users only
 the access they need, and keep an independent backup before changing a live site.
 
+![Grav Commander 0.4.0 Files in dark mode, showing independent source and destination panes, hidden-file switches and clickable permission values](docs/screenshots/commander-0.4.0-files-dark.png)
+
+Screenshots show **0.4.0** with sample files on a staging site. Optional controls
+appear according to the plugins installed and the user's access.
+
+<details>
+<summary>View the Files workspace in light mode</summary>
+
+![The same Grav Commander 0.4.0 dual-pane workspace in light mode](docs/screenshots/commander-0.4.0-files-light.png)
+
+</details>
+
 ## Install or upgrade
 
 You need **Grav 2**, **Admin2 (admin-next)**, **API 1.0.44 or newer**, **PHP 8.3 or
@@ -180,6 +192,8 @@ The **Permissions** column shows values such as **0644** or **0755**. Click the
 value itself to open the permissions dialog; selecting the file first is unnecessary.
 It shows the owner and group, readable permission details and applicable warnings.
 
+![Grav Commander 0.4.0 Unix permissions dialog with owner, group and other read/write/execute controls, octal entry and presets](docs/screenshots/commander-0.4.0-permissions-dark.png)
+
 Permissions describe what the **owner**, members of the **group**, and **other**
 users can do. Read means read a file or list a directory. Write means change a file
 or change entries in a directory. Execute means run a file; for a directory it means
@@ -205,6 +219,8 @@ Use **Backup item** for a selected file/folder, or the **Backups** tab for a sit
 backup. Choose a profile, add a useful note and run the backup. Default profiles
 cover the full site, user folder, pages/media, and configuration/data. Review the
 backup's details, health information and included paths before relying on it.
+
+![Grav Commander 0.4.0 Backup Center with a sample file backup, profile and schedule controls, storage checks and optional Site Safeguard link](docs/screenshots/commander-0.4.0-backups-dark.png)
 
 Safety backups are enabled by default before supported destructive file operations,
 including replacement. Keep both `auto_backup_on_write` and `backup.enabled` enabled

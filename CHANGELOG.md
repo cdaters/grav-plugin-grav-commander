@@ -1,3 +1,8 @@
+## Unreleased — documentation only
+
+- Added current 0.4.0 Files, Unix permissions and Backup Center screenshots to the
+  administrator README, including light and dark appearance examples.
+
 ## 0.4.0 — 2026-10-06
 
 - Added a dual-pane file workspace with independent roots, history, breadcrumbs,

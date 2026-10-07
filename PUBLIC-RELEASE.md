@@ -1,61 +1,43 @@
-# Grav Commander 0.4.0 — published release
+# Grav Commander 0.4.1
 
-A Grav-native dual-pane file and site operations workspace for Admin2.
-[Version 0.4.0](https://github.com/cdaters/grav-plugin-grav-commander/releases/tag/v0.4.0)
-is published. The release tag and ZIP are immutable; `main` may include later
-documentation and metadata corrections awaiting a future release.
+A focused integration and usability patch for Grav 2/Admin2.
 
-- Independent roots, breadcrumbs, histories, filtering, sorting and selection.
-- Explicit active source/opposite destination, responsive pane switching and
-  coordinated copy/move/delete/archive requests with full-selection preflight.
-- New file/folder, duplicate, image preview, ZIP inspection and keyboard workflows.
-- Automatic compatible editors with Caxton/native/Commander fallbacks; pinned
-  buffers, unsaved-change guards, YAML/JSON/frontmatter validation,
-  atomic file replacement and revision checks on editor Save.
-- Remembered per-pane hidden-file switches, clickable Unix modes with guarded
-  permission dialogs, configured external roots and clear boundaries.
-- Grav page detection, page/media/package/config identity and existing
-  backup/restore safeguards. Optional Jarvis Apply remains unsaved-buffer only.
+- Optional Revision Ledger checkpoints after successful changed saves of recognized
+  Grav page files, including embedded-editor and Jarvis-assisted saves.
+- Clearer hover and keyboard focus for clickable Unix permission values.
+- Informational labels showing the automatically resolved editor and fallback.
+- Plain-language companion-plugin guidance and current 0.4.1 screenshots.
+- Grav-formatted changelog and a downloads-compatible `plug` blueprint icon.
 
-Requires Grav 2, API >=1.0.44, Admin2, PHP >=8.3 and ext-zip. Preserve site overrides
-in user/config/plugins/grav-commander.yaml, install the versioned package and clear
-Grav caches. No configuration migration is required from 0.3.15.
+Commander works independently. Revision Ledger remains optional: its existing
+public service is used without a Ledger update or required dependency. Checkpoints
+contain the newly saved page content, authenticated author and reason `Saved with
+Grav Commander`; no separate AI marker is added. Both Commander write and Ledger
+manage permissions are enforced. Failed/canceled/unchanged saves do not checkpoint.
 
-Operations are bounded synchronous requests. Collisions require explicit choices;
-preflight checks the complete selection, but later I/O failure can leave completed
-items or a partial destination. Review reported results before retrying. There is
-no background resume or cancellation. Cross-pane drag/drop, syntax highlighting,
-line gutters and deeper semantic refactoring remain deferred.
+Ordinary files, Markdown attachments, bulk copy/replace, upload, rename/move,
+delete, extraction and backup restore are not recorded. Ledger is page history,
+not an operation log or a substitute for Commander's safety backups. Checkpoint
+failure never turns a successful file Save into a false failed-save response.
 
-See README.md for keyboard shortcuts, limits, permissions, configuration and safe
-operation details. The authoritative suite owns development; the deterministic
-exporter copies identical package files here. Do not independently develop both
-copies. Documentation follow-ups do not replace prior release assets.
+Requires Grav 2, Admin2, API >=1.0.44, PHP >=8.3 and ext-zip. Preserve site overrides
+in `user/config/plugins/grav-commander.yaml`, install the versioned package and clear
+Grav caches. No configuration migration is required from 0.4.0. Test on staging
+and keep independent backups before powerful filesystem or restore operations.
 
-## Documentation and metadata follow-ups — 2026-10-06
+## Release and distribution
 
-- Added current 0.4.0 Files, Unix permissions and Backup Center screenshots to the
-  administrator README, including light and dark appearance examples.
-- Corrected all recorded changelog releases to Grav's version/date headings and
-  supported category lists, preserving release dates and change descriptions.
-  Moved the post-release screenshot note here so the changelog contains releases
-  only. Added the format checklist to [CONTRIBUTING.md](CONTRIBUTING.md).
-- Changed the blueprint listing icon from `folder-tree` to `plug`, which renders
-  in the downloads site's Font Awesome stylesheet. This metadata correction is
-  on `main`; it is not part of the already published 0.4.0 tag or ZIP.
+[GitHub releases](https://github.com/cdaters/grav-plugin-grav-commander/releases)
+carry the versioned package. Git tags, release attachments and checksums describe
+immutable versions; main-branch documentation may subsequently improve.
+The 0.4.0 and earlier tags/assets are preserved. The corrections previously made
+on main are included in 0.4.1, without rewriting those published artifacts.
 
-## Downloads listing notes
+Commander is already listed in official GPM. A new GitHub release follows normal
+GPM indexing; no new submission is required. The live downloads listing may show
+an older version until refresh. Daters CGPM is a separate publication step.
 
-The [Grav downloads listing](https://getgrav.org/downloads/plugins#grav-commander)
-already shows Commander 0.4.0. During the documentation review, its changelog
-endpoint returned only whitespace. The published changelog uses headings that
-do not match [Grav's required format](https://learn.getgrav.org/2/plugins/gpm-submission).
-The corrected file on `main` is ready for a future release, but does not replace
-the changelog in the existing 0.4.0 tag or ZIP. A corrected live listing has not
-been verified; that depends on GPM's indexed source and refresh behavior.
-
-The missing header icon was caused by the published blueprint's `icon: folder-tree`:
-the downloads site's loaded Font Awesome stylesheet supplies no glyph for
-`fa-folder-tree`. The blueprint on `main` now uses `icon: plug`, whose `fa-plug`
-glyph was verified on the site. The live listing can retain the old icon until
-GPM indexes the corrected metadata. Runtime files are unchanged.
+Develop in the authoritative suite and use the deterministic exporter. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the source/mirror and changelog conventions,
+[README.md](README.md) for administrator workflows, and
+[the integration notes](docs/REVISION-LEDGER.md) for the precise history contract.

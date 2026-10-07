@@ -1,7 +1,7 @@
 name: Grav Commander
 slug: grav-commander
 type: plugin
-version: 0.4.0
+version: 0.4.1
 description: Dual-pane file manager for Grav 2 Admin2 with automatic editing, ZIP tools and guarded backups.
 icon: plug
 author:

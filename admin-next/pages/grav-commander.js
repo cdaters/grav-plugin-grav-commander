@@ -429,19 +429,20 @@ class GravCommanderPage extends HTMLElement {
         if (!current()) return;
         if (script.length > 4000000) throw new Error('Provider module exceeds adapter limit.');
         await this.mountProvider(provider, script);
+        if (current()) this.setState({ file: { ...this.state.file, resolvedEditor: provider.label || provider.id } });
         return;
       } catch (error) {
         this._lastProviderFailure = error.message;
         if (!current()) return;
         this.destroyProvider();
-        if (this.state.file) this.setState({ file: { ...this.state.file, providerId: null } });
+        if (this.state.file) this.setState({ file: { ...this.state.file, providerId: null, resolvedEditor: null } });
       }
     }
     if (!current()) return;
     if (allowNative && file.identity?.page_route && !this.isDirty()) {
-      this.setState({ file: null, busy: false });
+      this.setState({ file: { ...this.state.file, resolvedEditor: 'Grav' }, busy: false, message: 'Opening with Grav…' });
       window.location.assign(`${this.adminBasePath()}/pages/edit/${file.identity.page_route.split('/').map(encodeURIComponent).join('/')}`);
-    } else this.setState({ message: 'Using Commander’s built-in editor.' });
+    } else this.setState({ file: { ...this.state.file, resolvedEditor: /^(md|markdown)$/.test(file.extension) ? 'Commander Markdown' : 'Commander source editor' }, message: 'Using Commander’s built-in editor.' });
   }
 
   mountProvider(provider, script) {
@@ -512,7 +513,7 @@ class GravCommanderPage extends HTMLElement {
       if (!adapter.ready) adapter.reject();
       else {
         const remaining = (file.editors || []).slice((file.editors || []).findIndex(p => p.id === adapter.provider.id) + 1);
-        this.destroyProvider(); this.setState({ file: { ...file, providerId: null }, message: 'Editor unavailable; preserving your unsaved buffer.' });
+        this.destroyProvider(); this.setState({ file: { ...file, providerId: null, resolvedEditor: null }, message: 'Editor unavailable; preserving your unsaved buffer.' });
         void this.resolveEditor(false, remaining);
       }
       return;
@@ -2151,7 +2152,9 @@ Save settings, return here, then choose the new root in either pane. Paths such 
         .gc-hidden-toggle input:checked + .gc-switch-track { background:var(--gc-primary); }
         .gc-hidden-toggle input:checked + .gc-switch-track::after { transform:translateX(14px); }
         .gc-hidden-toggle input:focus-visible + .gc-switch-track { outline:3px solid var(--gc-primary); outline-offset:3px; }
-        .gc-mode { font-family:ui-monospace,monospace; color:var(--gc-primary); text-decoration:underline; text-underline-offset:3px; background:transparent; border-color:transparent; }
+        .gc-mode:hover, .gc-mode:focus-visible { background:var(--gc-button-hover); border-color:var(--gc-primary); text-decoration-thickness:2px; }
+        .gc-mode:focus-visible { outline:2px solid var(--gc-primary); outline-offset:2px; }
+        .gc-mode { cursor:pointer; font-family:ui-monospace,monospace; color:var(--gc-primary); text-decoration:underline; text-underline-offset:3px; background:transparent; border-color:transparent; }
         .gc-permission-bits { border:1px solid var(--gc-border); border-radius:8px; margin:16px 0; }
         .gc-bit-grid { display:grid; grid-template-columns:1fr repeat(3,1fr); align-items:center; gap:10px; text-align:center; white-space:normal; }
         .gc-bit-grid input { justify-self:center; accent-color:var(--gc-primary); }
@@ -2171,7 +2174,7 @@ Save settings, return here, then choose the new root in either pane. Paths such 
           <div class="gc-head">
             <div class="gc-title">
               <h2>🗂️ Grav Commander</h2>
-              <p>0.4.0 · Grav-native file and site operations</p>
+              <p>0.4.1 · Grav-native file and site operations</p>
             </div>
             <div class="gc-tools">
               <button id="gc-settings" title="Open Grav Commander plugin settings">Settings</button>
@@ -2192,7 +2195,7 @@ Save settings, return here, then choose the new root in either pane. Paths such 
         <div class="gc-workspace">${this.paneHtml('left')}${this.paneHtml('right')}</div>
         ${this.workspaceActionsHtml(true)}
         ${file ? `<section class="gc-card gc-editor-card">
-          <div class="gc-head"><div class="gc-title"><h2>${file.providerId ? this.escape(file.providerLabel || 'Editor') : file.preview ? 'Preview' : /^(md|markdown)$/.test(file.extension) ? 'Markdown source editor' : 'Code / text editor'}</h2><p>${this.escape(file.root)}:/${this.escape(file.path)}</p></div><div class="gc-tools"><span id="gc-dirty" role="status">${this.isDirty() ? '● Unsaved changes' : 'Saved / read-only'}</span><button id="gc-editor-reload">Reload from disk</button><button id="gc-editor-close">Close editor</button></div></div>
+          <div class="gc-head"><div class="gc-title"><h2>${file.providerId ? this.escape(file.providerLabel || 'Editor') : file.preview ? 'Preview' : /^(md|markdown)$/.test(file.extension) ? 'Markdown source editor' : 'Code / text editor'}</h2><p>${this.escape(file.root)}:/${this.escape(file.path)}</p>${file.editable && file.resolvedEditor ? `<p id="gc-editor-resolution" role="status">Editing with ${this.escape(file.resolvedEditor)}</p>` : ''}</div><div class="gc-tools"><span id="gc-dirty" role="status">${this.isDirty() ? '● Unsaved changes' : 'Saved / read-only'}</span><button id="gc-editor-reload">Reload from disk</button><button id="gc-editor-close">Close editor</button></div></div>
             <div class="gc-panel">
               ${file.preview === 'image' ? `<img class="gc-image-preview" src="${this.escape(this.previewUrl)}" alt="${this.escape(file.name)}">` : file.preview === 'archive' ? `<div class="gc-archive-preview"><strong>${file.entries.length} archive entries</strong><ul>${file.entries.map(entry => `<li>${this.escape(entry.name)} · ${this.escape(this.formatSize(entry.size))}</li>`).join('')}</ul></div>` : file ? `
                 ${this.markdownToolbarHtml(file)}

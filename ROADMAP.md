@@ -1,5 +1,10 @@
 # Grav Commander roadmap
 
+## Delivered in 0.4.1
+
+Optional Revision Ledger checkpoints after supported successful page saves, editor
+status labels, stronger permission-value hover/focus and companion-plugin guidance.
+
 ## Delivered in 0.4.0
 
 Dual-pane source/destination workspace, independent navigation and histories,
@@ -12,7 +17,8 @@ accessible themed dialogs, editor focus/native Grav actions, consistent controls
 reviewed collision policies with folder merge and replacement safety backups. Physical
 root guidance, remembered hidden-file switches, clickable Unix modes, Markdown tools,
 automatic compatible editor selection and Jarvis defaults/catalogs are included. Optional
-File Vault navigation uses public metadata; direct Revision Ledger checkpoints are not integrated.
+File Vault navigation uses public metadata. See README for the page-save-only
+Revision Ledger integration added in 0.4.1.
 
 ## Future increments
 

@@ -122,7 +122,46 @@ class ApiController extends AbstractApiController
         $body = $this->getRequestBody($request);
         $this->requireFields($body, ['root', 'path']);
         if (!isset($body['content']) || !is_string($body['content'])) throw new ValidationException('Content must be text.');
-        return ApiResponse::create($this->service()->write((string) $body['root'], (string) $body['path'], (string) $body['content'], isset($body['revision']) ? (string) $body['revision'] : null));
+        $checkpoint = null;
+        try {
+            $this->requirePermission($request, 'revision-ledger.manage');
+            if ($this->grav['config']->get('plugins.revision-ledger.enabled', false)
+                && isset($this->grav['revisionLedger'])
+                && is_callable([$this->grav['revisionLedger'], 'checkpointPage'])) {
+                $ledger = $this->grav['revisionLedger'];
+                $author = (string) $this->getUser($request)->username;
+                $checkpoint = fn (string $absolute, string $content): array => $this->checkpointSavedPage($ledger, $absolute, $content, $author);
+            }
+        } catch (\Throwable) { /* Optional history never widens permission or blocks Commander Save. */ }
+        $result = $this->service()->write((string) $body['root'], (string) $body['path'], (string) $body['content'], isset($body['revision']) ? (string) $body['revision'] : null, $checkpoint);
+        if (($result['revision_ledger']['status'] ?? '') === 'unavailable') {
+            $result['message'] .= ' Revision Ledger checkpoint unavailable; the file itself was saved.';
+        }
+        return ApiResponse::create($result);
+    }
+
+    /** Uses Ledger's documented public service; page history is not generic file history. */
+    private function checkpointSavedPage(object $ledger, string $absolute, string $content, string $author): array
+    {
+        try {
+            $pagesRoot = realpath(GRAV_ROOT . '/user/pages');
+            if (!$pagesRoot || !str_starts_with($absolute, $pagesRoot . '/')
+                || !in_array(strtolower(pathinfo($absolute, PATHINFO_EXTENSION)), ['md', 'markdown'], true)) {
+                return ['status' => 'unsupported'];
+            }
+            $pages = $this->grav['pages'];
+            $pages->enablePages();
+            foreach ($pages->all() as $page) {
+                // Exact canonical page file, not a guessed route or a Markdown attachment.
+                if (!is_object($page) || !method_exists($page, 'filePath') || realpath((string) $page->filePath()) !== $absolute) continue;
+                $revision = $ledger->checkpointPage($page, $content, 'Saved with Grav Commander', 'plugin', $author);
+                return ['status' => !empty($revision['deduplicated']) ? 'unchanged' : 'recorded'];
+            }
+            return ['status' => 'unsupported'];
+        } catch (\Throwable) {
+            // Do not expose storage paths, retry a completed save, or claim history succeeded.
+            return ['status' => 'unavailable'];
+        }
     }
 
     public function changePermissions(ServerRequestInterface $request): ResponseInterface

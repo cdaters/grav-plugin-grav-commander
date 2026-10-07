@@ -237,7 +237,7 @@ class FileService
         }
 
         return [
-            'plugin_version' => '0.4.0',
+            'plugin_version' => '0.4.1',
             'permissions_supported' => PHP_OS_FAMILY !== 'Windows' && function_exists('fileperms'),
             'chmod_supported' => $this->chmodSupported(),
             'integrations' => ['file_vault' => [
@@ -396,7 +396,7 @@ class FileService
         ];
     }
 
-    public function write(string $root, string $path, string $content, ?string $revision = null): array
+    public function write(string $root, string $path, string $content, ?string $revision = null, ?callable $afterSave = null): array
     {
         $this->assertRootWritable($root);
         $abs = $this->resolve($root, $path, false);
@@ -407,6 +407,7 @@ class FileService
         if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) throw new ValidationException('Another save is in progress.');
         $temporary = null;
         try {
+            $unchanged = is_file($abs) && hash_equals(hash('sha256', $content), (string) hash_file('sha256', $abs));
             if ($revision !== null && (!is_file($abs) || !hash_equals($revision, hash_file('sha256', $abs)))) {
                 throw new ValidationException('File changed on disk. Reload and review before saving.');
             }
@@ -420,7 +421,10 @@ class FileService
             if ($revision !== null && (!is_file($abs) || !hash_equals($revision, hash_file('sha256', $abs)))) throw new ValidationException('File changed during save. Reload and review.');
             if (!rename($temporary, $abs)) throw new ValidationException('Unable to replace file.');
             $temporary = null;
-            return ['message' => 'File saved.', 'root' => $root, 'path' => $this->sanitizeRelative($path), 'bytes' => strlen($content), 'revision' => hash('sha256', $content)];
+            $result = ['message' => 'File saved.', 'root' => $root, 'path' => $this->sanitizeRelative($path), 'bytes' => strlen($content), 'revision' => hash('sha256', $content)];
+            // Only after atomic promotion, while the save lock still protects this content.
+            if ($afterSave && !$unchanged) $result['revision_ledger'] = $afterSave($abs, $content);
+            return $result;
         } finally {
             if ($temporary && is_file($temporary)) @unlink($temporary);
             flock($lock, LOCK_UN); fclose($lock);
@@ -1083,7 +1087,7 @@ class FileService
 
         $meta = [
             'plugin' => 'grav-commander',
-            'version' => '0.4.0',
+            'version' => '0.4.1',
             'scope' => 'file',
             'reason' => $reason,
             'root' => $root,
@@ -1122,7 +1126,7 @@ class FileService
 
         $meta = [
             'plugin' => 'grav-commander',
-            'version' => '0.4.0',
+            'version' => '0.4.1',
             'scope' => 'site',
             'reason' => $reason,
             'profile' => $profileKey,
@@ -1911,7 +1915,7 @@ class FileService
             '[REASON]' => $reasonSlug,
             '[ROOT]' => $rootSlug,
             '[PATH]' => $pathSlug,
-            '[VERSION]' => $this->safeFilenamePart('0.4.0', 'version'),
+            '[VERSION]' => $this->safeFilenamePart('0.4.1', 'version'),
             '[RANDOM]' => bin2hex(random_bytes(8)),
         ];
 

@@ -1,3 +1,15 @@
+# 0.4.1
+## 2026-10-07
+
+1. [](#new)
+    * Optional Revision Ledger checkpoints after successful saves of recognized Grav page files, including embedded-editor and Jarvis-assisted saves, with Ledger permission checks.
+    * A small status label identifies the automatically selected editor and follows fallback changes.
+2. [](#improved)
+    * Clickable Unix permission values have clearer hover highlighting and visible keyboard focus without an extra action button.
+    * Expanded companion-plugin guidance, exact page-history limits and current interface screenshots.
+3. [](#bugfix)
+    * Use a downloads-site-compatible plug icon and Grav-formatted changelog so GPM can display release metadata.
+
 # 0.4.0
 ## 2026-10-06
 

@@ -1,21 +1,21 @@
 # Grav Commander
 
-Release 0.4.0 of Grav Commander puts a two-pane file manager and Backup Center inside Grav 2's
+Release 0.4.1 of Grav Commander puts a two-pane file manager and Backup Center inside Grav 2's
 Admin2. Browse your site's files, copy between folders, edit text, manage ZIPs and
 make backups without leaving the administrator interface.
 
 Commander is for trusted administrators. Start on a staging site, give users only
 the access they need, and keep an independent backup before changing a live site.
 
-![Grav Commander 0.4.0 Files in dark mode, showing independent source and destination panes, hidden-file switches and clickable permission values](docs/screenshots/commander-0.4.0-files-dark.png)
+![Grav Commander 0.4.1 Files in dark mode, showing independent source and destination panes, hidden-file switches and clickable permission values](docs/screenshots/commander-0.4.1-files-dark.png)
 
-Screenshots show **0.4.0** with sample files on a staging site. Optional controls
+Screenshots show **0.4.1** with sample files on a staging site. Optional controls
 appear according to the plugins installed and the user's access.
 
 <details>
 <summary>View the Files workspace in light mode</summary>
 
-![The same Grav Commander 0.4.0 dual-pane workspace in light mode](docs/screenshots/commander-0.4.0-files-light.png)
+![The same Grav Commander 0.4.1 dual-pane workspace in light mode](docs/screenshots/commander-0.4.1-files-light.png)
 
 </details>
 
@@ -26,7 +26,8 @@ newer**, and PHP's **ZIP extension** for archives, backups and restores.
 
 1. Download the Commander release ZIP from the
    [releases page](https://github.com/cdaters/grav-plugin-grav-commander/releases).
-   For a release candidate, use the supplied RC ZIP.
+   You can also install with `bin/gpm install grav-commander` or update with
+   `bin/gpm update grav-commander` once GPM lists the release.
 2. Extract its `grav-commander` folder into `user/plugins/grav-commander` in your
    Grav installation. Avoid a second nested `grav-commander` folder.
 3. Enable **Grav Commander** in Admin2's Plugins settings. Clear the Grav cache
@@ -158,6 +159,9 @@ If the files change during review, Commander requires a new review.
 
 Select a file and click **Edit**, press Enter, or double-click it. Commander chooses
 the best available compatible editor automatically; there is no editor picker.
+A small **Editing with…** label identifies the editor in use and updates if it
+falls back. Native page editing shows **Opening with Grav…** before handing off
+to the Grav page editor.
 
 - **Grav page Markdown:** a compatible installed editor, with Caxton preferred by
   the built-in integration; otherwise the native Grav page editor.
@@ -186,13 +190,17 @@ Read-only roots, file size limits, blocked formats and host permissions may limi
 file to viewing or downloading. Server scripts such as PHP and shell scripts are
 blocked by default. Do not loosen that policy for untrusted users.
 
+![Grav Commander 0.4.1 automatically using Caxton, with its editor status label and optional Jarvis tools](docs/screenshots/commander-0.4.1-editor-dark.png)
+
 ## Linux and Unix file permissions
 
 The **Permissions** column shows values such as **0644** or **0755**. Click the
 value itself to open the permissions dialog; selecting the file first is unnecessary.
+Hovering highlights its border and underline. Tab gives it a visible focus ring;
+Enter opens the same dialog.
 It shows the owner and group, readable permission details and applicable warnings.
 
-![Grav Commander 0.4.0 Unix permissions dialog with owner, group and other read/write/execute controls, octal entry and presets](docs/screenshots/commander-0.4.0-permissions-dark.png)
+![Grav Commander 0.4.1 Unix permissions dialog with owner, group and other read/write/execute controls, octal entry and presets](docs/screenshots/commander-0.4.1-permissions-dark.png)
 
 Permissions describe what the **owner**, members of the **group**, and **other**
 users can do. Read means read a file or list a directory. Write means change a file
@@ -220,7 +228,7 @@ backup. Choose a profile, add a useful note and run the backup. Default profiles
 cover the full site, user folder, pages/media, and configuration/data. Review the
 backup's details, health information and included paths before relying on it.
 
-![Grav Commander 0.4.0 Backup Center with a sample file backup, profile and schedule controls, storage checks and optional Site Safeguard link](docs/screenshots/commander-0.4.0-backups-dark.png)
+![Grav Commander 0.4.1 Backup Center with a sample file backup, profile and schedule controls, storage checks and optional Site Safeguard link](docs/screenshots/commander-0.4.1-backups-dark.png)
 
 Safety backups are enabled by default before supported destructive file operations,
 including replacement. Keep both `auto_backup_on_write` and `backup.enabled` enabled
@@ -243,16 +251,41 @@ run:** your host must run Grav's scheduler from cron. See
 
 ## Optional integrations
 
-Commander works on its own. Unavailable integrations simply do not appear: controls
-are shown only when their integration is available and your access permits it.
+Commander works on its own. Unavailable integrations simply do not appear. If a
+companion sounds useful, install and configure it normally; Commander uses its
+supported capabilities automatically when your account has the required access.
 
-| Integration | What to expect |
+| Companion | Why you might want it |
 | --- | --- |
-| Compatible editors / Caxton | Automatic editing for supported files. Caxton must be enabled and allow Markdown field replacement. Its Source mode also requires its own permission. Other editors can implement the [public adapter](docs/EDITOR-ADAPTERS.md). |
-| Jarvis | Assistance for one eligible open text file. Commander uses Jarvis's configured provider/default model and loads model choices automatically. Explain, Summarize and Review give feedback; rewrite proposals require review and **Apply**, then a separate **Save file**. Apply only changes the unsaved buffer. Review context before sending it to a provider; limits and redaction are not a complete secret scanner. |
-| Site Safeguard | **Open Site Safeguard** in Backups is the preferred advanced backup, staging and restore workflow when available. Its own access and confirmations still apply. Commander backups work without it. |
-| File Vault | **Manage distribution in File Vault** opens its native management screen. Known managed files can show access, password and download details. Commander does not automatically import, copy or publish the selected file. |
-| Revision Ledger | Use its normal page-history workflow when saving in the native Grav page editor. Commander 0.4.0 has no direct Ledger history control; direct Commander file saves (including embedded editors), moves and deletes do not create Ledger checkpoints. Use Commander backups for those operations. |
+| **Caxton** | Richer Markdown editing. Commander automatically uses it for supported Markdown, including page content, when Markdown field replacement is enabled. You do not need to select an editor. Caxton's Source mode requires its own permission. |
+| **Jarvis** | AI-assisted explanation, summaries, review and proposed text changes. Review a proposal before **Apply**, which changes only the unsaved buffer. **Save file** writes it to disk. Provider accounts, API keys and default models are configured in Jarvis. Review what you send; redaction is not a complete secret scanner. |
+| **Site Safeguard** | Advanced backups, staging and recovery. **Open Site Safeguard** in Backups takes you to that workflow with its own access checks and confirmations. Commander's built-in backups remain available. |
+| **File Vault** | Controlled file distribution and download management. **Manage distribution in File Vault** opens its management screen; known managed files may show access, password and download details. Commander does not automatically adopt, import or publish files. |
+| **Revision Ledger** | Page history. After a changed Grav page is successfully saved in Commander, Ledger can retain the saved version so you can compare or restore it through Ledger's own history screen. See the limits below. |
+
+### What Revision Ledger records
+
+With a compatible, enabled Revision Ledger and **revision-ledger.manage** access,
+Commander records the **newly saved content** of recognized Grav page files under
+`user/pages`. This includes Commander Markdown/source saves, embedded-editor saves
+and Jarvis-assisted changes once you click Save. Ledger identifies the author and
+labels the checkpoint **Saved with Grav Commander**. It does not add a separate
+AI marker. No Ledger update or required dependency is introduced by Commander 0.4.1.
+
+Opening a file, reviewing or applying a Jarvis proposal, canceling, failed saves
+and saves without content changes do not add checkpoints. Ordinary Markdown files,
+page attachments, configuration and other non-page files are not tracked.
+Bulk copy/replace, uploads, rename/move, delete, archive extraction and backup
+restore do **not** add Commander checkpoints. History follows Ledger's existing
+page rules; it is not a filesystem activity log or a substitute for backups.
+
+Commander records after Save, so the first checkpoint does not recover the version
+that existed before that save. Keep safety backups for that earlier content.
+Native Grav page editing retains Ledger's own normal history behavior. Commander
+has no separate history browser. If Ledger is missing, disabled or your access
+is insufficient, Save still works. If a checkpoint fails after saving, Commander
+reports that the file was saved but history was unavailable; do not repeat Save
+expecting it to repair history automatically.
 
 ## Keyboard and appearance
 
@@ -302,7 +335,7 @@ the browser's own required leave-page warning.
   Ask the host about ownership; do not fix this by making everything world-writable.
 
 For settings and limits, see [Configuration](docs/CONFIGURATION.md). For plugin
-authors, see [Editor adapters](docs/EDITOR-ADAPTERS.md). Report reproducible issues
+authors, see [Editor adapters](docs/EDITOR-ADAPTERS.md) and [Revision Ledger integration](docs/REVISION-LEDGER.md). Report reproducible issues
 with versions and redacted error details on the
 [issue tracker](https://github.com/cdaters/grav-plugin-grav-commander/issues).
 Never include credentials or private file contents.

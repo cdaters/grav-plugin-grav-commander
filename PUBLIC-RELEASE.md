@@ -2,8 +2,8 @@
 
 A Grav-native dual-pane file and site operations workspace for Admin2.
 [Version 0.4.0](https://github.com/cdaters/grav-plugin-grav-commander/releases/tag/v0.4.0)
-is published. The release tag and ZIP are immutable; documentation on `main` may
-include later corrections and screenshots.
+is published. The release tag and ZIP are immutable; `main` may include later
+documentation and metadata corrections awaiting a future release.
 
 - Independent roots, breadcrumbs, histories, filtering, sorting and selection.
 - Explicit active source/opposite destination, responsive pane switching and
@@ -32,7 +32,7 @@ operation details. The authoritative suite owns development; the deterministic
 exporter copies identical package files here. Do not independently develop both
 copies. Documentation follow-ups do not replace prior release assets.
 
-## Documentation follow-ups — 2026-10-06
+## Documentation and metadata follow-ups — 2026-10-06
 
 - Added current 0.4.0 Files, Unix permissions and Backup Center screenshots to the
   administrator README, including light and dark appearance examples.
@@ -40,6 +40,9 @@ copies. Documentation follow-ups do not replace prior release assets.
   supported category lists, preserving release dates and change descriptions.
   Moved the post-release screenshot note here so the changelog contains releases
   only. Added the format checklist to [CONTRIBUTING.md](CONTRIBUTING.md).
+- Changed the blueprint listing icon from `folder-tree` to `plug`, which renders
+  in the downloads site's Font Awesome stylesheet. This metadata correction is
+  on `main`; it is not part of the already published 0.4.0 tag or ZIP.
 
 ## Downloads listing notes
 
@@ -51,8 +54,8 @@ The corrected file on `main` is ready for a future release, but does not replace
 the changelog in the existing 0.4.0 tag or ZIP. A corrected live listing has not
 been verified; that depends on GPM's indexed source and refresh behavior.
 
-The missing header icon is separate: the listing uses `icon: folder-tree` from
-the plugin blueprint, but its loaded Font Awesome stylesheet supplies no glyph
-for `fa-folder-tree`. Other listings' `fa-plug` icons render. Changing the
-blueprint to a website-compatible icon requires a separate metadata update;
-no icon metadata or runtime files changed in this documentation follow-up.
+The missing header icon was caused by the published blueprint's `icon: folder-tree`:
+the downloads site's loaded Font Awesome stylesheet supplies no glyph for
+`fa-folder-tree`. The blueprint on `main` now uses `icon: plug`, whose `fa-plug`
+glyph was verified on the site. The live listing can retain the old icon until
+GPM indexes the corrected metadata. Runtime files are unchanged.

@@ -24,6 +24,38 @@ export → review the concise diff → commit/push main → publish a matching
 `vX.Y.Z` GitHub tag and release. Never overwrite a published version. GPM then
 discovers the release for an approved listing; CGPM distribution is independent.
 
+## Changelog format
+
+Keep `CHANGELOG.md` in [Grav's documented format](https://learn.getgrav.org/2/plugins/gpm-submission):
+
+```markdown
+# 0.4.0
+## 2026-10-06
+
+1. [](#new)
+    * Describe a new feature.
+2. [](#improved)
+    * Describe an improvement.
+3. [](#bugfix)
+    * Describe a fix.
+```
+
+Use a level-one version heading and a separate level-two ISO date, newest release
+first. Leave a blank line before the list and indent every nested bullet by four
+spaces. Include only the categories needed: `new`, `improved`, `bugfix`. Keep the
+version prefix consistent and preserve the actual release dates. Do not combine
+the version and date or add an `Unreleased` heading to this parser-facing file.
+Record post-release documentation work in `PUBLIC-RELEASE.md` instead.
+
+Use `YYYY-MM-DD` rather than ambiguous numeric dates: Grav interprets slash dates
+as month-first. Keep release tags in this repository's `vX.Y.Z` style; do not mix
+prefixed and unprefixed tags. Existing GPM listings discover new GitHub releases
+automatically, without another submission issue.
+
+Check the rendered Markdown as well as the text before exporting. A documentation
+fix on `main` does not change the changelog inside an already published tag or ZIP;
+never move a release tag or replace its asset to repair documentation.
+
 Package files come only from the plugin directory. The three repository-only
 files (`CONTRIBUTING.md`, `PUBLIC-RELEASE.md`, `.gitattributes`) come from
 `public/grav-commander` and are marked `export-ignore`. They are omitted from

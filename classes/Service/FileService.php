@@ -33,6 +33,7 @@ class FileService
                 'key' => $key,
                 'label' => $root['label'] ?? ucfirst($key),
                 'path' => $root['path'] ?? '',
+                'absolute_path' => $base,
                 'writable' => (bool) ($root['writable'] ?? false),
                 'exists' => $base !== '',
                 'error' => $error,

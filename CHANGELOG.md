@@ -26,6 +26,11 @@
 - Fixed same-second backup filename collisions and require successful archive close
   before a replacement proceeds. Version remains 0.4.0; no publication in this RC pass.
 
+- RC follow-up: show physical root boundaries and configuration guidance; add a
+  Markdown formatting toolbar and primary Edit Markdown action with retained raw mode.
+- Honor Jarvis's configured provider and named default through its public bootstrap;
+  load models automatically and ignore stale responses after provider changes.
+
 ## 0.3.15 — 2026-10-05
 
 - Standardize ordinary Grav blueprint keywords for package search and shared repository Topics.

@@ -40,6 +40,8 @@ class GravCommanderPage extends HTMLElement {
       jarvisStatus: null,
       jarvisProvider: '',
       jarvisModels: [],
+      jarvisModelsLoading: false,
+      jarvisDefaults: null,
       jarvisModel: '',
       jarvisAction: 'explain',
       jarvisCustomInstruction: '',
@@ -340,10 +342,12 @@ class GravCommanderPage extends HTMLElement {
       const schedules = status?.schedules || {};
       const profileKeys = Object.keys(profiles);
       const first = rootList.find(r => r.key === this.state.root) || rootList[0];
+      const jarvisDefaults = jarvisStatus?.available ? await this.api('/grav-jarvis/bootstrap').catch(() => null) : null;
       const jarvisProviders = Array.isArray(jarvisStatus?.providers) ? jarvisStatus.providers : [];
+      const preferred = jarvisDefaults?.default_provider || jarvisDefaults?.providers?.find(provider => provider.preferred)?.id;
       const jarvisProvider = jarvisProviders.some(provider => provider.id === this.state.jarvisProvider)
         ? this.state.jarvisProvider
-        : (jarvisProviders[0]?.id || '');
+        : (jarvisProviders.find(provider => provider.id === preferred)?.id || jarvisProviders[0]?.id || '');
       this.state = {
         ...this.state,
         roots: rootList,
@@ -354,6 +358,7 @@ class GravCommanderPage extends HTMLElement {
         profileDraft: JSON.stringify(profiles, null, 2),
         root: first?.key || 'pages',
         jarvisStatus,
+        jarvisDefaults,
         jarvisProvider,
       };
       await this.loadList(false);
@@ -377,17 +382,64 @@ class GravCommanderPage extends HTMLElement {
 
   async openDir(path) { return this.navigatePane(this.activePane, this.state.root, path); }
 
-  async openFile(item, root = this.state.root) {
+  async openFile(item, root = this.state.root, editorMode = 'markdown') {
     if (this.state.jarvisBusy || (this.isDirty() && !await this.confirmModal({ title: 'Discard unsaved changes?', message: `Unsaved changes in ${this.state.file.path} will be discarded.`, okText: 'Discard changes', danger: true }))) return;
     await this.guard(async () => {
       const file = await this.api(`/grav-commander/read?root=${encodeURIComponent(root)}&path=${encodeURIComponent(item.path)}`);
-      this.setState({ file: { ...file, savedContent: file.content }, message: `Opened ${item.name}`, jarvisAction: 'explain', jarvisProposal: null, jarvisError: '', jarvisMessage: '' });
+      this.setState({ file: { ...file, editorMode, savedContent: file.content }, message: `Opened ${item.name}`, jarvisAction: 'explain', jarvisProposal: null, jarvisError: '', jarvisMessage: '' });
     }, 'Opening file…');
-    if (this.state.file?.path === item.path && this.state.file.root === root) requestAnimationFrame(() => {
-      const editor = this.shadowRoot.querySelector('#gc-editor');
-      editor?.focus({ preventScroll: true });
-      this.shadowRoot.querySelector('.gc-editor-card')?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
-    });
+    if (this.state.file?.path === item.path && this.state.file.root === root) {
+      if (this.state.jarvisStatus?.available && this.jarvisEligibleFile(this.state.file) && this._modelsProvider !== this.state.jarvisProvider) void this.loadJarvisModels();
+      requestAnimationFrame(() => {
+        const editor = this.shadowRoot.querySelector('#gc-editor');
+        editor?.focus({ preventScroll: true });
+        this.shadowRoot.querySelector('.gc-editor-card')?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+      });
+    }
+  }
+
+  async configureRoots(id) {
+    const pane = this.pane(id), root = this.state.roots.find(root => root.key === pane.root);
+    const settings = await this.confirmModal({ title: 'Configure filesystem roots', okText: 'Open root settings', message: `This pane is bounded by ${root?.label || pane.root}: ${root?.absolute_path || root?.path || ''}. Up stops at that boundary.
+
+In Commander plugin settings, add an entry under “Additional or overridden filesystem roots”:
+• Site root: key “site”, label “Site root”, path “.”
+• Server home: key “server-home”, label “Server home”, and the absolute home directory supplied by your hosting account.
+
+Save settings, return here, then choose the new root in either pane. Paths such as /home/account/public_html need the leading slash to be absolute. Enable “Allow writes” only if you want to change files there. PHP must have filesystem permission to access the directory.` });
+    if (settings) await this.openPluginSettings();
+  }
+
+  markdownToolbarHtml(file) {
+    if (!file?.editable || !/^(md|markdown)$/.test(file.extension) || file.editorMode === 'raw') return '';
+    const actions = [['heading','Heading'],['bold','Bold'],['italic','Italic'],['strike','Strikethrough'],['list','Bullet list'],['numbered','Numbered list'],['quote','Quote'],['code','Code'],['link','Link'],['image','Image'],['rule','Divider']];
+    return `<div class="gc-markdown-toolbar" role="group" aria-label="Markdown formatting">${actions.map(([action,label]) => `<button type="button" data-markdown="${action}" title="${label}${action === 'bold' ? ' (Cmd/Ctrl+B)' : action === 'italic' ? ' (Cmd/Ctrl+I)' : ''}">${label}</button>`).join('')}</div>`;
+  }
+
+  formatMarkdown(action) {
+    const editor = this.shadowRoot.querySelector('#gc-editor'), file = this.state.file;
+    if (!editor || !file?.editable || !/^(md|markdown)$/.test(file.extension)) return;
+    let start = editor.selectionStart, end = editor.selectionEnd;
+    const value = editor.value, selected = value.slice(start, end);
+    let replacement, selectStart = 0, selectEnd;
+    const inline = { bold: ['**','**','bold text'], italic: ['*','*','italic text'], strike: ['~~','~~','text'], code: ['`','`','code'], link: ['[','](https://example.com)','link text'], image: ['![','](image.jpg)','alt text'] };
+    if (inline[action]) {
+      const [before, after, placeholder] = inline[action];
+      replacement = before + (selected || placeholder) + after;
+      selectStart = before.length; selectEnd = selectStart + (selected || placeholder).length;
+      if (action === 'code' && selected.includes('\n')) { replacement = '```\n' + selected + '\n```'; selectStart = 4; selectEnd = 4 + selected.length; }
+    } else if (['heading','list','numbered','quote'].includes(action)) {
+      start = value.lastIndexOf('\n', start - 1) + 1;
+      const lineEnd = value.indexOf('\n', Math.max(start, end - (end > start && value[end - 1] === '\n' ? 1 : 0)));
+      end = lineEnd < 0 ? value.length : lineEnd;
+      replacement = value.slice(start,end).split('\n').map((line,index) => (action === 'heading' ? '## ' : action === 'list' ? '- ' : action === 'numbered' ? `${index + 1}. ` : '> ') + line).join('\n');
+    } else if (action === 'rule') replacement = '\n\n---\n\n';
+    else return;
+    editor.focus({ preventScroll: true }); editor.setSelectionRange(start, end);
+    // Native text insertion retains the browser's textarea undo history when available.
+    if (!document.execCommand?.('insertText', false, replacement)) editor.setRangeText(replacement, start, end, 'end');
+    editor.setSelectionRange(start + selectStart, start + (selectEnd ?? replacement.length));
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
   editorContent() {
@@ -411,9 +463,12 @@ class GravCommanderPage extends HTMLElement {
   async loadJarvisModels() {
     const provider = this.state.jarvisProvider;
     if (!provider) return;
-    this.setState({ jarvisBusy: true, jarvisError: '', jarvisMessage: 'Loading models…' });
+    const request = this._modelRequest = (this._modelRequest || 0) + 1;
+    this._modelsProvider = provider;
+    this.setState({ jarvisModelsLoading: true, jarvisError: '', jarvisMessage: 'Loading models…' });
     try {
       const data = await this.api(`/grav-commander/jarvis/providers/${encodeURIComponent(provider)}/models`);
+      if (request !== this._modelRequest || provider !== this.state.jarvisProvider) return;
       const models = Array.isArray(data.models) ? data.models.filter(model => model.available !== false) : [];
       this.setState({
         jarvisModels: models,
@@ -421,10 +476,16 @@ class GravCommanderPage extends HTMLElement {
         jarvisMessage: data.message || (models.length ? `${models.length} model${models.length === 1 ? '' : 's'} loaded.` : 'Provider default model will be used.'),
       });
     } catch (err) {
-      this.setState({ jarvisModels: [], jarvisModel: '', jarvisError: err.message || String(err), jarvisMessage: '' });
+      if (request !== this._modelRequest || provider !== this.state.jarvisProvider) return;
+      this.setState({ jarvisModels: [], jarvisModel: '', jarvisError: err.message || String(err), jarvisMessage: 'Configured provider default remains selected. Refresh models to retry.' });
     } finally {
-      this.setState({ jarvisBusy: false });
+      if (request === this._modelRequest) this.setState({ jarvisModelsLoading: false });
     }
+  }
+
+  jarvisDefaultLabel() {
+    const model = this.state.jarvisDefaults?.providers?.find(provider => provider.id === this.state.jarvisProvider)?.default_model;
+    return model ? `Configured default · ${model}` : 'Provider default';
   }
 
   async validateJarvisProvider() {
@@ -1094,7 +1155,7 @@ class GravCommanderPage extends HTMLElement {
     }, 'Saving backup storage path…');
   }
 
-  async openSelected() { const item = this.state.selected; if (item?.type === 'dir') return this.openDir(item.path); if (item?.viewable) return this.openFile(item); }
+  async openSelected() { const item = this.state.selected; if (item?.type === 'dir') return this.openDir(item.path); if (item?.viewable) return this.openFile(item, this.state.root, 'raw'); }
 
   async downloadSelected() {
     const item = this.state.selected || this.state.file;
@@ -1479,15 +1540,17 @@ class GravCommanderPage extends HTMLElement {
     const pane = this.pane(id), active = id === this.activePane, items = this.visibleItems(pane);
     const e = value => this.escape(value);
     const suffix = active ? '' : '-other';
+    const rootInfo = this.state.roots.find(root => root.key === pane.root);
     const parts = pane.path.split('/').filter(Boolean);
     const breadcrumbs = [{ label: pane.root, path: '' }, ...parts.map((part, index) => ({ label: part, path: parts.slice(0, index + 1).join('/') }))];
     return `<section class="gc-card gc-pane ${active ? 'active' : ''}" data-pane="${id}" aria-label="${id} file pane">
       <div class="gc-head"><button data-activate="${id}" aria-pressed="${active}">${id === 'left' ? 'Left' : 'Right'} · ${active ? 'Source (active)' : 'Destination'}</button><span class="gc-muted-small">${pane.selection?.length || 0} selected / ${pane.items.length}</span></div>
       <div class="gc-pane-nav">
         <select aria-label="${id} root" data-root id="gc-root${suffix}">${this.state.roots.map(root => `<option value="${e(root.key)}" ${root.key === pane.root ? 'selected' : ''} ${root.exists === false ? 'disabled' : ''}>${e(root.label)}${root.writable ? '' : ' (read-only)'}</option>`).join('')}</select>
+        <div class="gc-root-boundary"><span>${pane.path ? 'Root' : 'At configured root'}: <code>${e(rootInfo?.absolute_path || rootInfo?.path || pane.root)}</code></span><button data-configure-roots type="button">Configure roots</button></div>
         <div class="gc-tools"><button data-history="-1" aria-label="${id} back" ${pane.historyIndex > 0 ? '' : 'disabled'}>←</button><button data-history="1" aria-label="${id} forward" ${pane.historyIndex < pane.history.length - 1 ? '' : 'disabled'}>→</button><button data-up ${pane.path ? '' : 'disabled'}>Up</button><button data-refresh>Refresh</button></div>
         <nav class="gc-crumbs" aria-label="${id} breadcrumbs">${breadcrumbs.map(crumb => `<button data-crumb="${e(crumb.path)}">${e(crumb.label)}</button>`).join('<span>/</span>')}</nav>
-        <div class="gc-path-row"><input type="text" data-path id="gc-path${suffix}" aria-label="${id} folder path" value="${e(pane.path)}" placeholder="Folder path"><button data-go id="gc-go${suffix}">Go</button></div>
+        <div class="gc-path-row"><input type="text" data-path id="gc-path${suffix}" aria-label="${id} folder path" title="Path relative to this configured root; use the root selector for another location" value="${e(pane.path)}" placeholder="Folder path"><button data-go id="gc-go${suffix}">Go</button></div>
         <div class="gc-path-row"><input type="text" data-filter aria-label="${id} filename filter" value="${e(pane.filter)}" placeholder="Filter this folder…"><select data-sort aria-label="${id} sort">${['name','size','modified'].map(key => `<option ${pane.sort === key ? 'selected' : ''}>${key}</option>`).join('')}</select><button data-reverse aria-label="${id} reverse sort">${pane.reverse ? '↓' : '↑'}</button></div>
       </div>
       <div class="gc-table-wrap" tabindex="0" role="region" aria-label="${id} directory listing"><table aria-label="${id} files"><thead><tr><th>Name</th><th>Size</th><th>Modified</th></tr></thead><tbody>${items.map(item => `<tr data-entry="${e(item.path)}" class="${pane.selection?.includes(item.path) ? 'selected' : ''}" aria-selected="${!!pane.selection?.includes(item.path)}"><td><input type="checkbox" data-toggle aria-label="Toggle ${e(item.name)}" ${pane.selection?.includes(item.path) ? 'checked' : ''}><button class="gc-file-entry gc-name" aria-label="Select ${e(item.name)}"><span aria-hidden="true">${pane.selection?.includes(item.path) ? '✓' : this.iconFor(item)}</span>${e(item.name)}</button><small>${e(item.identity?.kind || (item.type === 'dir' ? 'Folder' : item.extension))}</small></td><td>${e(this.formatSize(item.size))}</td><td>${e(this.formatDate(item.modified))}</td></tr>`).join('')}</tbody></table>${items.length ? '' : '<div class="gc-empty">No matching items.</div>'}</div>
@@ -1501,7 +1564,7 @@ class GravCommanderPage extends HTMLElement {
     const destination = this.pane(this.activePane === 'left' ? 'right' : 'left');
     const destWritable = this.state.roots.find(root => root.key === destination.root)?.writable;
     const button = (id, label, enabled = true, danger = false) => `<button id="gc-${id}" ${enabled ? '' : 'disabled'} ${danger ? 'class="danger"' : ''}>${label}</button>`;
-    if (contextual) return item ? `<section class="gc-card"><div class="gc-pane-footer">${item ? `${item.identity?.page_route ? '<button id="gc-open-grav-editor" class="primary">Open in Grav Editor</button>' : ''}${button('open', item.type === 'dir' ? 'Open folder' : item.editable ? 'Edit Raw' : 'View', item.type === 'dir' || item.viewable)}${item.archive || /\.(png|jpe?g|gif|webp|avif)$/i.test(item.name) ? button('preview', item.archive ? 'Inspect archive' : 'Preview image') : ''}${item.extractable && writable ? button('extract', 'Extract ZIP') : ''}${button('rename', 'Rename', writable)}${button('duplicate', 'Duplicate', writable)}${item.type !== 'dir' ? button('download', 'Download') : ''}${button('backup-file', 'Backup item')}` : ''}</div>${item ? `<div class="gc-footer-note">${this.escape(item.identity?.kind || item.type)} · ${this.escape(item.path)} · ${this.escape(this.formatSize(item.size))} · ${this.escape(this.formatDate(item.modified))}${/package/.test(item.identity?.kind || '') ? ' · Moving package files may affect the installed extension.' : ''}</div>` : ''}</section>` : '';
+    if (contextual) return item ? `<section class="gc-card"><div class="gc-pane-footer">${item ? `${item.identity?.page_route ? '<button id="gc-open-grav-editor" class="primary">Open in Grav Editor</button>' : item.editable && /^(md|markdown)$/.test(item.extension) ? '<button id="gc-open-markdown" class="primary">Edit Markdown</button>' : ''}${button('open', item.type === 'dir' ? 'Open folder' : item.editable ? 'Edit Raw' : 'View', item.type === 'dir' || item.viewable)}${item.archive || /\.(png|jpe?g|gif|webp|avif)$/i.test(item.name) ? button('preview', item.archive ? 'Inspect archive' : 'Preview image') : ''}${item.extractable && writable ? button('extract', 'Extract ZIP') : ''}${button('rename', 'Rename', writable)}${button('duplicate', 'Duplicate', writable)}${item.type !== 'dir' ? button('download', 'Download') : ''}${button('backup-file', 'Backup item')}` : ''}</div>${item ? `<div class="gc-footer-note">${this.escape(item.identity?.kind || item.type)} · ${this.escape(item.path)} · ${this.escape(this.formatSize(item.size))} · ${this.escape(this.formatDate(item.modified))}${/package/.test(item.identity?.kind || '') ? ' · Moving package files may affect the installed extension.' : ''}</div>` : ''}</section>` : '';
     return `<section class="gc-card"><div class="gc-head"><div class="gc-title"><strong>${this.escape(this.state.root)}:/${this.escape(this.state.path)} → ${this.escape(destination.root)}:/${this.escape(destination.path)}</strong><p>${selection.length} selected · click, Cmd/Ctrl-click or Shift-click · F6 changes pane</p></div><div class="gc-tools">${button('switch-pane', 'Switch pane')}<button id="gc-swap">Swap locations</button></div></div><div class="gc-pane-footer">
       ${button('new-file', 'New file', writable)}${button('new-folder', 'New folder', writable)}${button('upload-button', 'Upload', writable)}<input id="gc-upload" class="gc-hidden" type="file">
       ${button('copy', 'Copy →', selection.length && destWritable)}${button('move', 'Move →', selection.length && writable && destWritable)}${button('delete', 'Delete', selection.length && writable, true)}${button('zip', 'Archive selection', selection.length && writable)}
@@ -1518,6 +1581,9 @@ class GravCommanderPage extends HTMLElement {
       const current = Object.fromEntries(this.paneKeys().map(key => [key, this.state[key]]));
       Object.assign(this.state, this.panes[other]); this.panes[other] = current; this.render();
     });
+    q('#gc-open-markdown')?.addEventListener('click', () => this.openFile(this.state.selected));
+    q('#gc-markdown-toggle')?.addEventListener('click', () => this.setState({ file: { ...this.state.file, editorMode: this.state.file.editorMode === 'raw' ? 'markdown' : 'raw' } }));
+    this.shadowRoot.querySelectorAll('[data-markdown]').forEach(button => button.addEventListener('click', () => this.formatMarkdown(button.dataset.markdown)));
     q('#gc-new-file')?.addEventListener('click', () => this.createFile());
     q('#gc-upload-button')?.addEventListener('click', () => q('#gc-upload')?.click());
     q('#gc-duplicate')?.addEventListener('click', () => this.duplicateSelected());
@@ -1525,13 +1591,14 @@ class GravCommanderPage extends HTMLElement {
     q('#gc-editor-close')?.addEventListener('click', () => this.discardEditor());
     q('#gc-editor-reload')?.addEventListener('click', async () => {
       const file = this.state.file;
-      if (await this.discardEditor()) await this.openFile(file, file.root);
+      if (await this.discardEditor()) await this.openFile(file, file.root, file.editorMode);
     });
     q('#gc-validate')?.addEventListener('click', () => this.validateEditor());
     this.shadowRoot.querySelectorAll('[data-pane]').forEach(element => {
       const id = element.dataset.pane;
       element.querySelector('[data-activate]').addEventListener('click', () => this.activatePane(id));
       const navigate = (root, path, index = null) => this.navigatePane(id, root, path, index);
+      element.querySelector('[data-configure-roots]').addEventListener('click', () => this.configureRoots(id));
       element.querySelector('[data-root]').addEventListener('change', event => navigate(event.target.value, ''));
       element.querySelector('[data-go]').addEventListener('click', () => navigate(this.pane(id).root, element.querySelector('[data-path]').value));
       element.querySelector('[data-path]').addEventListener('keydown', event => { if (event.key === 'Enter') element.querySelector('[data-go]').click(); });
@@ -1577,6 +1644,7 @@ class GravCommanderPage extends HTMLElement {
         return;
       }
       if (this.state.busy) return;
+      if ((event.metaKey || event.ctrlKey) && ['b', 'i'].includes(event.key.toLowerCase()) && event.target.id === 'gc-editor' && this.state.file?.editorMode !== 'raw' && /^(md|markdown)$/.test(this.state.file?.extension)) { event.preventDefault(); this.formatMarkdown(event.key.toLowerCase() === 'b' ? 'bold' : 'italic'); return; }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's' && this.state.file?.editable) { event.preventDefault(); this.saveFile(); }
       if (event.key === 'F6') { event.preventDefault(); this.activatePane(this.activePane === 'left' ? 'right' : 'left'); this.shadowRoot.querySelector(`[data-pane="${this.activePane}"] .gc-table-wrap`)?.focus(); }
       if (event.key === 'Escape' && this.state.file) { event.preventDefault(); this.discardEditor(); }
@@ -1829,6 +1897,11 @@ class GravCommanderPage extends HTMLElement {
         .gc-archive-preview { max-height:420px; overflow:auto; overflow-wrap:anywhere; }
         .gc-title p, .gc-title strong, .gc-footer-note { overflow-wrap:anywhere; }
         .gc-shell { min-width:0; }
+        .gc-root-boundary { display:flex; gap:8px; justify-content:space-between; align-items:center; font-size:12px; color:var(--gc-muted); }
+        .gc-root-boundary span { min-width:0; overflow-wrap:anywhere; }
+        .gc-root-boundary button { flex-shrink:0; font-size:12px; }
+        .gc-markdown-toolbar { display:flex; flex-wrap:wrap; gap:6px; padding-bottom:10px; }
+        .gc-markdown-toolbar button { font-size:13px; }
         .gc-editor-card { min-width:0; }
         .gc-editor-card textarea { tab-size:2; }
         .gc-table-wrap:focus-visible { outline:3px solid var(--gc-primary); outline-offset:-3px; }
@@ -1863,10 +1936,11 @@ class GravCommanderPage extends HTMLElement {
         <div class="gc-workspace">${this.paneHtml('left')}${this.paneHtml('right')}</div>
         ${this.workspaceActionsHtml(true)}
         ${file ? `<section class="gc-card gc-editor-card">
-          <div class="gc-head"><div class="gc-title"><h2>${file.preview ? 'Preview' : /^(md|markdown)$/.test(file.extension) ? 'Markdown source editor' : 'Code / text editor'}</h2><p>${this.escape(file.root)}:/${this.escape(file.path)}</p></div><div class="gc-tools"><span id="gc-dirty" role="status">${this.isDirty() ? '● Unsaved changes' : 'Saved / read-only'}</span><button id="gc-editor-reload">Reload from disk</button><button id="gc-editor-close">Close editor</button></div></div>
+          <div class="gc-head"><div class="gc-title"><h2>${file.preview ? 'Preview' : /^(md|markdown)$/.test(file.extension) && file.editorMode !== 'raw' ? 'Markdown editor' : 'Code / text editor'}</h2><p>${this.escape(file.root)}:/${this.escape(file.path)}</p></div><div class="gc-tools"><span id="gc-dirty" role="status">${this.isDirty() ? '● Unsaved changes' : 'Saved / read-only'}</span>${file.editable && /^(md|markdown)$/.test(file.extension) ? `<button id="gc-markdown-toggle">${file.editorMode === 'raw' ? 'Show Markdown tools' : 'Edit Raw'}</button>` : ''}<button id="gc-editor-reload">Reload from disk</button><button id="gc-editor-close">Close editor</button></div></div>
             <div class="gc-panel">
               ${file.preview === 'image' ? `<img class="gc-image-preview" src="${this.escape(this.previewUrl)}" alt="${this.escape(file.name)}">` : file.preview === 'archive' ? `<div class="gc-archive-preview"><strong>${file.entries.length} archive entries</strong><ul>${file.entries.map(entry => `<li>${this.escape(entry.name)} · ${this.escape(this.formatSize(entry.size))}</li>`).join('')}</ul></div>` : file ? `
                 ${this.isGravPageMarkdownPath(file.path) ? `<div class="gc-empty">This looks like a Grav page Markdown file. Use <button type="button" id="gc-open-grav-editor-inline">Open in Grav Editor</button> for the full page workflow, or continue here for raw Markdown editing.</div>` : ''}
+                ${this.markdownToolbarHtml(file)}
                 <textarea id="gc-editor" aria-label="File contents" spellcheck="false" ${file.editable ? '' : 'readonly'}>${this.escape(file.content || '')}</textarea>
                 <div class="gc-tools">
                   <button id="gc-save" class="primary" ${file.editable ? '' : 'disabled'}>${file.editable ? 'Save file' : 'Read-only preview'}</button>
@@ -1887,7 +1961,7 @@ class GravCommanderPage extends HTMLElement {
                     </label>
                     <label>Model
                       <select id="gc-jarvis-model" aria-label="Jarvis model">
-                        <option value="">Provider default</option>
+                        <option value="" ${jarvisModel === '' ? 'selected' : ''}>${this.escape(this.jarvisDefaultLabel())}</option>
                         ${jarvisModels.map(model => `<option value="${this.escape(model.id)}" ${model.id === jarvisModel ? 'selected' : ''}>${this.escape(model.label || model.id)}</option>`).join('')}
                       </select>
                     </label>
@@ -1896,7 +1970,7 @@ class GravCommanderPage extends HTMLElement {
                         ${jarvisActions.map(action => `<option value="${this.escape(action.id)}" ${action.id === jarvisAction ? 'selected' : ''}>${this.escape(action.label)}</option>`).join('')}
                       </select>
                     </label>
-                    <div class="gc-tools"><button id="gc-jarvis-load-models" type="button">Load models</button><button id="gc-jarvis-validate" type="button">Check provider</button></div>
+                    <div class="gc-tools"><button id="gc-jarvis-load-models" type="button" ${this.state.jarvisModelsLoading ? 'disabled' : ''}>${this.state.jarvisModelsLoading ? 'Loading models…' : 'Refresh models'}</button><button id="gc-jarvis-validate" type="button">Check provider</button></div>
                   </div>
                   ${jarvisAction === 'custom' ? `<label class="gc-field"><span>Custom instruction</span><textarea id="gc-jarvis-custom" class="gc-jarvis-custom" maxlength="4000" aria-label="Custom Jarvis instruction" placeholder="Describe what Jarvis should do with this file…">${this.escape(jarvisCustomInstruction)}</textarea></label>` : ''}
                   <div class="gc-tools"><button id="gc-jarvis-run" class="primary" type="button" ${jarvisBusy ? 'disabled' : ''}>${jarvisBusy ? 'Working…' : 'Run Jarvis action'}</button></div>
@@ -2121,6 +2195,7 @@ class GravCommanderPage extends HTMLElement {
     this.shadowRoot.querySelector('#gc-jarvis-provider')?.addEventListener('change', event => {
       if (this.state.file) this.state.file = { ...this.state.file, content: this.editorContent() };
       this.setState({ jarvisProvider: event.target.value, jarvisModels: [], jarvisModel: '', jarvisProposal: null, jarvisMessage: '', jarvisError: '' });
+      void this.loadJarvisModels();
     });
     this.shadowRoot.querySelector('#gc-jarvis-model')?.addEventListener('change', event => {
       if (this.state.file) this.state.file = { ...this.state.file, content: this.editorContent() };

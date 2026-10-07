@@ -9,7 +9,8 @@ revision checks and document validation, image/ZIP previews and desktop uploads.
 Backup/restore and optional public-contract Jarvis integration remain available. RC
 polish adds configurable external roots, preferred optional Site Safeguard handoff,
 accessible themed dialogs, editor focus/native Grav actions, consistent controls and
-reviewed collision policies with folder merge and replacement safety backups.
+reviewed collision policies with folder merge and replacement safety backups. Physical
+root guidance, Markdown formatting tools and automatic Jarvis defaults/catalogs are included.
 
 ## Future increments
 

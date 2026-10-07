@@ -66,9 +66,13 @@ Grav-aware labels identify page folders/media, plugin/theme package contents and
 configuration. Markdown beneath the actual `user/pages` tree offers **Open in Grav
 Editor** as the primary action (also Enter/double-click), as well as **Edit Raw**, even
 through a custom root alias. Edit Raw opens, scrolls to and focuses the pinned editor
-without resetting either pane. Ordinary Markdown uses the Markdown source editor;
-Admin2 2.1.27 has no public standalone Markdown-buffer editor contract, so Commander
-does not import its private page-editor components. YAML/JSON/Twig/CSS/JS and other
+without resetting either pane. Ordinary Markdown has a primary **Edit Markdown**
+action with Heading, Bold, Italic, Strikethrough, lists, Quote, Code, Link, Image and
+Divider tools. These modify only the selected unsaved source; Save remains explicit.
+Cmd/Ctrl+B and I format the selection, and native textarea undo is retained where
+supported. **Edit Raw** and **Show Markdown tools** switch views without losing edits.
+This small source toolbar uses standard browser editing APIs; Commander does not
+import Admin2's private page-editor components or add an editor-plugin abstraction. YAML/JSON/Twig/CSS/JS and other
 allowed text use the raw code/text editor. Validation and stale-save checks remain.
 App-owned prompts and confirmations use themed, keyboard-accessible Commander dialogs
 with focus trapping, Escape and return focus. Browser tab/window unload protection
@@ -246,6 +250,14 @@ additional_roots:
     writable: false
 ```
 
+The Files pane displays the configured root's physical path. **Up** stops at that
+boundary; a relative Folder path cannot navigate above it. Choose **Configure roots**
+for setup guidance and a link to the native plugin settings. Add a `site` entry with
+path `.` to expose the Grav installation (often `public_html`). Add an explicit absolute
+server-home path to expose its parent. Save settings and return to Commander, then
+select the new root independently in either pane. Do not omit the leading `/` on
+absolute hosting paths.
+
 An additional entry with a built-in key overrides that root. Additional keys must be
 unique. Paths may be site-relative or absolute; directories must already exist and
 be accessible to PHP. Enable writes only for roots administrators intend to modify.
@@ -298,6 +310,14 @@ Eligible text/source files receive these actions:
 - Markdown Summarize may use Jarvis's public bounded chunk/synthesis contract.
   Explain and Review visibly truncate above the direct-context limit. Improve
   and Custom Prompt reject partial-file rewriting.
+
+Commander reads the preferred provider and its named default model from Jarvis's
+public `/grav-jarvis/bootstrap` API when the current user can access it. Model discovery
+starts automatically when an eligible editor opens and when the provider changes;
+**Refresh models** retries discovery. Catalog failures retain the configured default,
+and late responses from a previous provider cannot replace the current selection.
+This metadata loading does not generate content or save files. If bootstrap metadata
+is unavailable, Commander keeps its existing public-service fallback.
 
 The panel lets the user select a registered text provider, use its configured
 default model or discover a neutral model catalog, validate configuration

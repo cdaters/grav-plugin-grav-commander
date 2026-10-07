@@ -81,6 +81,23 @@ form:
         min: 4096
         max: 2097152
 
+    protected_path_patterns:
+      type: array
+      label: Protected path component patterns
+      help: 'Glob patterns deny matching names anywhere in canonical paths, including descendants and alternate roots. Independent of Show hidden files. Site-wide backup profiles retain their separate backup authority.'
+      value_only: true
+
+    permissions.allow_chmod:
+      type: toggle
+      label: Allow Unix permission changes
+      highlight: 1
+      default: 1
+      options:
+        1: Enabled
+        0: Disabled
+      validate:
+        type: bool
+
     additional_roots:
       type: list
       label: Additional or overridden filesystem roots

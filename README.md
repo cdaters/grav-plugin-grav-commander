@@ -2,6 +2,49 @@
 
 Release 0.4.0 is a Grav-native file and site operations workspace for Admin2.
 
+## Hidden files and protected paths
+
+Each pane has its own **Show hidden files** toggle, off by default. Preferences are
+remembered per authenticated user in this browser when local storage is available.
+Toggling preserves paths/history and visible selections; selections that become hidden
+are removed to prevent invisible destructive actions. Ordinary dotfiles/folders in
+external roots behave the same way. A selected folder still includes authorized hidden
+contents when copied or archived.
+
+Visibility is not authorization. `protected_path_patterns` matches glob patterns against
+each canonical absolute path component (case-insensitive), including alternate root aliases. Defaults deny
+`.ssh`, `.gnupg`, `.git`, `.env`, `.env.*`, `*.pem`, `*.key`, and common cloud/package-manager credential stores (`.aws`, `.azure`, `.kube`, `.docker`, `.netrc`, `.npmrc`, `.pypirc`, `.htpasswd`, `.git-credentials`). Administrators can change
+these patterns in plugin settings. Denied items are omitted from listings and refused
+by direct file operations, recursive operations and file-backup restore. Full-site backup
+profiles retain their separate backup/restore authority and can contain sensitive data;
+protect access to the Backup Center and stored archives.
+
+## Unix permissions
+
+Select an item to see owner/group, octal mode and rwx bits; **Permissions** opens details
+and informational warnings for world-writable items, sensitive-looking data, missing
+directory search bits and executable content. This is not a complete security audit.
+
+On supported Unix runtimes, Commander write authority plus a writable configured root
+allows chmod. Enter three octal rwx digits (optional leading zero), or use 0644/0600 file
+and 0755/0700 directory presets. Recursive changes need a directory, an explicit checkbox,
+and a second warning/confirmation. The same mode applies to every descendant; use care
+with execute bits. Bounded preflight rejects protected/symlink paths and stale plans.
+Partial failures report completed, failed and pending paths; chmod has no automatic undo.
+Set `permissions.allow_chmod: false` to retain informational display only. Windows or
+runtimes without chmod cannot offer mutation. PHP ownership and host policy may still
+refuse a mode change. No chown/chgrp or special-bit mutation is provided.
+
+## Optional File Vault integration
+
+An installed, enabled File Vault with a successful permission-checked public status
+response adds **Manage distribution in File Vault** for selected files. Known managed
+items are matched by public storage path/filename metadata; their public status fields
+show ACL, password protection and download count. Continue in File Vault's native UI.
+Commander never auto-publishes or duplicates a file. Server-file adoption, generalized
+managed-file lookup and item-specific deep links remain deferred until File Vault exposes
+stable contracts. An unknown match is not claimed to be unmanaged.
+
 ## Workspace quickstart
 
 Each pane has its own root, folder, breadcrumbs, back/forward history, filename
@@ -67,11 +110,12 @@ configuration. Markdown beneath the actual `user/pages` tree offers **Open in Gr
 Editor** as the primary action (also Enter/double-click), as well as **Edit Raw**, even
 through a custom root alias. Edit Raw opens, scrolls to and focuses the pinned editor
 without resetting either pane. Ordinary Markdown has a primary **Edit Markdown**
-action with Heading, Bold, Italic, Strikethrough, lists, Quote, Code, Link, Image and
-Divider tools. These modify only the selected unsaved source; Save remains explicit.
-Cmd/Ctrl+B and I format the selection, and native textarea undo is retained where
-supported. **Edit Raw** and **Show Markdown tools** switch views without losing edits.
-This small source toolbar uses standard browser editing APIs; Commander does not
+action. Both this and Grav-page **Edit Raw** always show Markdown tools: Undo/Redo,
+H1/H2/H3, emphasis, strikethrough, lists, blockquote, inline/fenced code, link, image,
+horizontal rule, table and Preview. Tools modify the selection in the unsaved buffer;
+Save stays explicit. Cmd/Ctrl+B/I and Cmd/Ctrl+Z/Shift+Z operate in the editor.
+Preview is a sandboxed, network-disabled rendering of Markdown, without Twig or
+Grav page includes; it is not a live site rendering. Commander does not
 import Admin2's private page-editor components or add an editor-plugin abstraction. YAML/JSON/Twig/CSS/JS and other
 allowed text use the raw code/text editor. Validation and stale-save checks remain.
 App-owned prompts and confirmations use themed, keyboard-accessible Commander dialogs

@@ -12,7 +12,7 @@ class GravCommanderPage extends HTMLElement {
       path: '',
       parent: '',
       items: [],
-      selection: [], anchor: null, filter: '', sort: 'name', reverse: false, history: [], historyIndex: -1,
+      selection: [], anchor: null, showHidden: false, filter: '', sort: 'name', reverse: false, history: [], historyIndex: -1,
       selected: null,
       file: null,
       backups: [],
@@ -338,6 +338,12 @@ class GravCommanderPage extends HTMLElement {
         safeguard.available = await this.api('/site-safeguard/status').then(() => true).catch(() => false);
         this.safeguardAvailable = safeguard.available;
       }
+      const vault = status?.integrations?.file_vault;
+      this.fileVaultStatus = vault?.installed && vault.enabled ? await this.api('/file-vault/status').catch(() => null) : null;
+      this.preferenceKey = `gravCommander.hidden.${status?.preference_key || 'session'}`;
+      let hidden = {};
+      try { hidden = JSON.parse(localStorage.getItem(this.preferenceKey) || '{}'); } catch {}
+      this.state.showHidden = hidden.left === true; this.panes.right.showHidden = hidden.right === true;
       const profiles = status?.profiles || {};
       const schedules = status?.schedules || {};
       const profileKeys = Object.keys(profiles);
@@ -386,10 +392,11 @@ class GravCommanderPage extends HTMLElement {
     if (this.state.jarvisBusy || (this.isDirty() && !await this.confirmModal({ title: 'Discard unsaved changes?', message: `Unsaved changes in ${this.state.file.path} will be discarded.`, okText: 'Discard changes', danger: true }))) return;
     await this.guard(async () => {
       const file = await this.api(`/grav-commander/read?root=${encodeURIComponent(root)}&path=${encodeURIComponent(item.path)}`);
+      this._editorUndo = []; this._editorRedo = [];
       this.setState({ file: { ...file, editorMode, savedContent: file.content }, message: `Opened ${item.name}`, jarvisAction: 'explain', jarvisProposal: null, jarvisError: '', jarvisMessage: '' });
     }, 'Opening file…');
     if (this.state.file?.path === item.path && this.state.file.root === root) {
-      if (this.state.jarvisStatus?.available && this.jarvisEligibleFile(this.state.file) && this._modelsProvider !== this.state.jarvisProvider) void this.loadJarvisModels();
+      if (this.state.jarvisStatus?.available && this.jarvisEligibleFile(this.state.file) && this._modelsProvider !== this.state.jarvisProvider) void this.loadJarvisModels(false);
       requestAnimationFrame(() => {
         const editor = this.shadowRoot.querySelector('#gc-editor');
         editor?.focus({ preventScroll: true });
@@ -411,14 +418,16 @@ Save settings, return here, then choose the new root in either pane. Paths such 
   }
 
   markdownToolbarHtml(file) {
-    if (!file?.editable || !/^(md|markdown)$/.test(file.extension) || file.editorMode === 'raw') return '';
-    const actions = [['heading','Heading'],['bold','Bold'],['italic','Italic'],['strike','Strikethrough'],['list','Bullet list'],['numbered','Numbered list'],['quote','Quote'],['code','Code'],['link','Link'],['image','Image'],['rule','Divider']];
+    if (!file?.editable || !/^(md|markdown)$/.test(file.extension)) return '';
+    const actions = [['undo','Undo'],['redo','Redo'],['h1','H1'],['h2','H2'],['h3','H3'],['bold','Bold'],['italic','Italic'],['strike','Strikethrough'],['list','Bulleted list'],['numbered','Numbered list'],['quote','Blockquote'],['code','Inline code'],['fence','Fenced code block'],['link','Link'],['image','Image'],['rule','Horizontal rule'],['table','Table'],['preview','Preview']];
     return `<div class="gc-markdown-toolbar" role="group" aria-label="Markdown formatting">${actions.map(([action,label]) => `<button type="button" data-markdown="${action}" title="${label}${action === 'bold' ? ' (Cmd/Ctrl+B)' : action === 'italic' ? ' (Cmd/Ctrl+I)' : ''}">${label}</button>`).join('')}</div>`;
   }
 
   formatMarkdown(action) {
     const editor = this.shadowRoot.querySelector('#gc-editor'), file = this.state.file;
     if (!editor || !file?.editable || !/^(md|markdown)$/.test(file.extension)) return;
+    if (action === 'preview') { void this.previewMarkdown(); return; }
+    if (action === 'undo' || action === 'redo') { this.editorHistory(action); return; }
     let start = editor.selectionStart, end = editor.selectionEnd;
     const value = editor.value, selected = value.slice(start, end);
     let replacement, selectStart = 0, selectEnd;
@@ -428,18 +437,73 @@ Save settings, return here, then choose the new root in either pane. Paths such 
       replacement = before + (selected || placeholder) + after;
       selectStart = before.length; selectEnd = selectStart + (selected || placeholder).length;
       if (action === 'code' && selected.includes('\n')) { replacement = '```\n' + selected + '\n```'; selectStart = 4; selectEnd = 4 + selected.length; }
-    } else if (['heading','list','numbered','quote'].includes(action)) {
+    } else if (['heading','h1','h2','h3','list','numbered','quote'].includes(action)) {
       start = value.lastIndexOf('\n', start - 1) + 1;
       const lineEnd = value.indexOf('\n', Math.max(start, end - (end > start && value[end - 1] === '\n' ? 1 : 0)));
       end = lineEnd < 0 ? value.length : lineEnd;
-      replacement = value.slice(start,end).split('\n').map((line,index) => (action === 'heading' ? '## ' : action === 'list' ? '- ' : action === 'numbered' ? `${index + 1}. ` : '> ') + line).join('\n');
-    } else if (action === 'rule') replacement = '\n\n---\n\n';
+      replacement = value.slice(start,end).split('\n').map((line,index) => (action === 'heading' ? '## ' : /^h[123]$/.test(action) ? '#'.repeat(Number(action[1])) + ' ' : action === 'list' ? '- ' : action === 'numbered' ? `${index + 1}. ` : '> ') + line).join('\n');
+    } else if (action === 'fence') { replacement = '\n```\n' + (selected || 'code') + '\n```\n'; selectStart = 5; selectEnd = 5 + (selected || 'code').length; }
+    else if (action === 'table') replacement = '\n| Column | Column |\n| --- | --- |\n| Text | Text |\n';
+    else if (action === 'rule') replacement = '\n\n---\n\n';
     else return;
     editor.focus({ preventScroll: true }); editor.setSelectionRange(start, end);
     // Native text insertion retains the browser's textarea undo history when available.
     if (!document.execCommand?.('insertText', false, replacement)) editor.setRangeText(replacement, start, end, 'end');
     editor.setSelectionRange(start + selectStart, start + (selectEnd ?? replacement.length));
     editor.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  editorHistory(action) {
+    const editor = this.shadowRoot.querySelector('#gc-editor');
+    if (!editor || !this.state.file?.editable) return;
+    const from = action === 'undo' ? this._editorUndo : this._editorRedo;
+    const to = action === 'undo' ? (this._editorRedo ||= []) : (this._editorUndo ||= []);
+    if (!from?.length) return;
+    to.push(editor.value); editor.value = from.pop();
+    this._historyApplying = true; editor.dispatchEvent(new Event('input', { bubbles: true })); this._historyApplying = false;
+    editor.focus({ preventScroll: true });
+  }
+
+  async previewMarkdown() {
+    const file = this.state.file, content = this.editorContent();
+    await this.guard(async () => {
+      const result = await this.api('/grav-commander/markdown-preview', { method: 'POST', body: JSON.stringify({ root: file.root, path: file.path, content }) });
+      if (this.state.file?.root !== file.root || this.state.file?.path !== file.path) return;
+      const dark = this.state.theme === 'dark';
+      const preview = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; form-action 'none'; base-uri 'none'"><style>body{font:16px/1.6 system-ui;padding:16px;background:${dark ? '#202228' : '#fff'};color:${dark ? '#eee' : '#222'}}pre,code{white-space:pre-wrap}a{color:${dark ? '#c5a1ff' : '#663399'}}img{display:none}</style>${result.html}`;
+      this.setState({ file: { ...this.state.file, markdownPreview: preview } });
+    }, 'Rendering Markdown preview…');
+  }
+
+  async editPermissions() {
+    const item = this.state.selected, root = this.state.root;
+    if (!item?.permissions) return;
+    const info = item.permissions;
+    const supported = this.state.status?.chmod_supported && this.state.status?.can_write && this.state.roots.find(r => r.key === root)?.writable;
+    const message = `${item.path}\nOwner: ${info.owner} · Group: ${info.group}\n${info.mode} ${info.symbolic}\n${info.warnings.join('\n')}\n\n${supported ? 'Use octal rwx bits: owner / group / others. Special bits are not supported. Changing modes can make content inaccessible.' : 'Informational only. Permission changes are unsupported, disabled, or require Commander write authority.'}`;
+    const fields = supported ? [{ name: 'mode', label: 'Octal mode (owner / group / others)', value: info.mode, required: true }, { name: 'preset', label: 'Preset (optional)', type: 'select', value: '', options: [['','Use octal entry'],['0644','0644 · public file'],['0600','0600 · private file'],['0755','0755 · directory / executable'],['0700','0700 · private directory']] }, ...(item.type === 'dir' ? [{ name: 'recursive', label: 'Apply recursively to every file and directory (may break access)', type: 'checkbox' }] : [])] : null;
+    const answer = await this.confirmModal({ title: 'Unix permissions', message, fields, okText: supported ? 'Review change' : 'Close' });
+    if (!answer || !supported) return;
+    const mode = answer.preset || answer.mode;
+    if (!/^0?[0-7]{3}$/.test(mode)) { this.setState({ error: 'Use an octal mode such as 0644 or 0755.' }); return; }
+    const body = { root, path: item.path, mode, recursive: !!answer.recursive, confirm_recursive: !!answer.recursive };
+    await this.guard(async () => {
+      const plan = await this.api('/grav-commander/permissions', { method: 'POST', body: JSON.stringify({ ...body, preview: true }) });
+      if (!await this.confirmModal({ title: answer.recursive ? 'Confirm recursive chmod' : 'Confirm permission change', message: `${plan.count} item(s) will receive ${mode}. ${answer.recursive ? 'The SAME mode applies to all descendants, including files. Missing directory execute bits can prevent browsing; executable bits on content may be unsafe. There is no automatic undo.' : ''}`, okText: 'Apply permissions', danger: true })) return;
+      const result = await this.api('/grav-commander/permissions', { method: 'POST', body: JSON.stringify({ ...body, revision: plan.revision }) });
+      await this.loadList(false);
+      this.setState({ message: result.message, error: result.failed?.length ? `${result.failed[0].path}: ${result.failed[0].message} · ${result.pending?.length || 0} pending` : '' });
+    }, 'Updating permissions…');
+  }
+
+  async openFileVault() {
+    const item = this.state.selected, vault = this.fileVaultStatus;
+    if (!item || !vault) return;
+    const base = this.state.roots.find(root => root.key === this.state.root)?.absolute_path;
+    const absolute = `${base}/${item.path}`;
+    const managed = vault.items?.find(entry => (entry.source_type || 'file') === 'file' && `${vault.storage_path}/${entry.filename}` === absolute);
+    const message = managed ? `Managed by File Vault: ${managed.display_name || managed.filename}\nACL: ${managed.access || 'public'} · Password protected: ${managed.password_protected ? 'yes' : 'no'} · Downloads: ${managed.download_count || 0}\nContinue in File Vault to manage distribution.` : 'Open File Vault to upload and manage controlled distribution. File Vault has no public server-file adoption or lookup contract; Commander will not copy or publish this selection automatically.';
+    if (await this.confirmModal({ title: 'File Vault distribution', message, okText: 'Open File Vault' }) && await this.discardEditor()) window.location.assign(`${this.adminBasePath()}/plugin/file-vault`);
   }
 
   editorContent() {
@@ -460,9 +524,14 @@ Save settings, return here, then choose the new root in either pane. Paths such 
     ].includes(String(file.extension || '').toLowerCase()) || ['makefile', 'readme'].includes(name);
   }
 
-  async loadJarvisModels() {
+  async loadJarvisModels(refresh = true) {
     const provider = this.state.jarvisProvider;
     if (!provider) return;
+    this._modelCache ||= new Map();
+    if (!refresh && this._modelCache.has(provider)) {
+      this._modelRequest = (this._modelRequest || 0) + 1; this._modelsProvider = provider;
+      this.setState({ jarvisModels: this._modelCache.get(provider), jarvisModelsLoading: false, jarvisError: '', jarvisMessage: 'Cached models loaded.' }); return;
+    }
     const request = this._modelRequest = (this._modelRequest || 0) + 1;
     this._modelsProvider = provider;
     this.setState({ jarvisModelsLoading: true, jarvisError: '', jarvisMessage: 'Loading models…' });
@@ -470,6 +539,7 @@ Save settings, return here, then choose the new root in either pane. Paths such 
       const data = await this.api(`/grav-commander/jarvis/providers/${encodeURIComponent(provider)}/models`);
       if (request !== this._modelRequest || provider !== this.state.jarvisProvider) return;
       const models = Array.isArray(data.models) ? data.models.filter(model => model.available !== false) : [];
+      this._modelCache.set(provider, models);
       this.setState({
         jarvisModels: models,
         jarvisModel: models.some(model => model.id === this.state.jarvisModel) ? this.state.jarvisModel : '',
@@ -1341,7 +1411,7 @@ Save settings, return here, then choose the new root in either pane. Paths such 
     return `<div class="gc-storage-lines"><code>${path}</code>${state}${warning}<span class="gc-note">Resolved: <code>${absolute}</code></span>${suggestion}</div>`;
   }
 
-  paneKeys() { return ['root', 'path', 'parent', 'items', 'selected', 'selection', 'anchor', 'filter', 'sort', 'reverse', 'history', 'historyIndex']; }
+  paneKeys() { return ['root', 'path', 'parent', 'items', 'selected', 'selection', 'anchor', 'showHidden', 'filter', 'sort', 'reverse', 'history', 'historyIndex']; }
 
   pane(id) {
     return id === this.activePane ? this.state : this.panes[id];
@@ -1359,7 +1429,7 @@ Save settings, return here, then choose the new root in either pane. Paths such 
 
   visibleItems(pane = this.state) {
     const filter = (pane.filter || '').toLocaleLowerCase();
-    return pane.items.filter(item => item.name.toLocaleLowerCase().includes(filter)).sort((a, b) => {
+    return pane.items.filter(item => (pane.showHidden || !item.name.startsWith('.')) && item.name.toLocaleLowerCase().includes(filter)).sort((a, b) => {
       if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
       const key = pane.sort || 'name';
       const value = key === 'name' ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) : (a[key] || 0) - (b[key] || 0);
@@ -1549,6 +1619,7 @@ Save settings, return here, then choose the new root in either pane. Paths such 
         <select aria-label="${id} root" data-root id="gc-root${suffix}">${this.state.roots.map(root => `<option value="${e(root.key)}" ${root.key === pane.root ? 'selected' : ''} ${root.exists === false ? 'disabled' : ''}>${e(root.label)}${root.writable ? '' : ' (read-only)'}</option>`).join('')}</select>
         <div class="gc-root-boundary"><span>${pane.path ? 'Root' : 'At configured root'}: <code>${e(rootInfo?.absolute_path || rootInfo?.path || pane.root)}</code></span><button data-configure-roots type="button">Configure roots</button></div>
         <div class="gc-tools"><button data-history="-1" aria-label="${id} back" ${pane.historyIndex > 0 ? '' : 'disabled'}>←</button><button data-history="1" aria-label="${id} forward" ${pane.historyIndex < pane.history.length - 1 ? '' : 'disabled'}>→</button><button data-up ${pane.path ? '' : 'disabled'}>Up</button><button data-refresh>Refresh</button></div>
+        <label class="gc-hidden-toggle"><input type="checkbox" data-show-hidden aria-label="${id} show hidden files" ${pane.showHidden ? 'checked' : ''}>Show hidden files</label>
         <nav class="gc-crumbs" aria-label="${id} breadcrumbs">${breadcrumbs.map(crumb => `<button data-crumb="${e(crumb.path)}">${e(crumb.label)}</button>`).join('<span>/</span>')}</nav>
         <div class="gc-path-row"><input type="text" data-path id="gc-path${suffix}" aria-label="${id} folder path" title="Path relative to this configured root; use the root selector for another location" value="${e(pane.path)}" placeholder="Folder path"><button data-go id="gc-go${suffix}">Go</button></div>
         <div class="gc-path-row"><input type="text" data-filter aria-label="${id} filename filter" value="${e(pane.filter)}" placeholder="Filter this folder…"><select data-sort aria-label="${id} sort">${['name','size','modified'].map(key => `<option ${pane.sort === key ? 'selected' : ''}>${key}</option>`).join('')}</select><button data-reverse aria-label="${id} reverse sort">${pane.reverse ? '↓' : '↑'}</button></div>
@@ -1564,7 +1635,7 @@ Save settings, return here, then choose the new root in either pane. Paths such 
     const destination = this.pane(this.activePane === 'left' ? 'right' : 'left');
     const destWritable = this.state.roots.find(root => root.key === destination.root)?.writable;
     const button = (id, label, enabled = true, danger = false) => `<button id="gc-${id}" ${enabled ? '' : 'disabled'} ${danger ? 'class="danger"' : ''}>${label}</button>`;
-    if (contextual) return item ? `<section class="gc-card"><div class="gc-pane-footer">${item ? `${item.identity?.page_route ? '<button id="gc-open-grav-editor" class="primary">Open in Grav Editor</button>' : item.editable && /^(md|markdown)$/.test(item.extension) ? '<button id="gc-open-markdown" class="primary">Edit Markdown</button>' : ''}${button('open', item.type === 'dir' ? 'Open folder' : item.editable ? 'Edit Raw' : 'View', item.type === 'dir' || item.viewable)}${item.archive || /\.(png|jpe?g|gif|webp|avif)$/i.test(item.name) ? button('preview', item.archive ? 'Inspect archive' : 'Preview image') : ''}${item.extractable && writable ? button('extract', 'Extract ZIP') : ''}${button('rename', 'Rename', writable)}${button('duplicate', 'Duplicate', writable)}${item.type !== 'dir' ? button('download', 'Download') : ''}${button('backup-file', 'Backup item')}` : ''}</div>${item ? `<div class="gc-footer-note">${this.escape(item.identity?.kind || item.type)} · ${this.escape(item.path)} · ${this.escape(this.formatSize(item.size))} · ${this.escape(this.formatDate(item.modified))}${/package/.test(item.identity?.kind || '') ? ' · Moving package files may affect the installed extension.' : ''}</div>` : ''}</section>` : '';
+    if (contextual) return item ? `<section class="gc-card"><div class="gc-pane-footer">${item ? `${item.identity?.page_route ? '<button id="gc-open-grav-editor" class="primary">Open in Grav Editor</button>' : item.editable && /^(md|markdown)$/.test(item.extension) ? '<button id="gc-open-markdown" class="primary">Edit Markdown</button>' : ''}${button('open', item.type === 'dir' ? 'Open folder' : item.editable ? 'Edit Raw' : 'View', item.type === 'dir' || item.viewable)}${item.archive || /\.(png|jpe?g|gif|webp|avif)$/i.test(item.name) ? button('preview', item.archive ? 'Inspect archive' : 'Preview image') : ''}${item.extractable && writable ? button('extract', 'Extract ZIP') : ''}${button('rename', 'Rename', writable)}${button('duplicate', 'Duplicate', writable)}${item.type !== 'dir' ? button('download', 'Download') : ''}${button('backup-file', 'Backup item')}${item.permissions ? button('permissions', 'Permissions') : ''}${item.type !== 'dir' && this.fileVaultStatus ? button('file-vault', 'Manage distribution in File Vault') : ''}` : ''}</div>${item ? `<div class="gc-footer-note">${this.escape(item.identity?.kind || item.type)} · ${this.escape(item.path)} · ${this.escape(this.formatSize(item.size))} · ${this.escape(this.formatDate(item.modified))}${item.permissions ? ' · ' + this.escape(item.permissions.mode + ' ' + item.permissions.symbolic + ' · ' + item.permissions.owner + ':' + item.permissions.group) : ''}${/package/.test(item.identity?.kind || '') ? ' · Moving package files may affect the installed extension.' : ''}</div>` : ''}</section>` : '';
     return `<section class="gc-card"><div class="gc-head"><div class="gc-title"><strong>${this.escape(this.state.root)}:/${this.escape(this.state.path)} → ${this.escape(destination.root)}:/${this.escape(destination.path)}</strong><p>${selection.length} selected · click, Cmd/Ctrl-click or Shift-click · F6 changes pane</p></div><div class="gc-tools">${button('switch-pane', 'Switch pane')}<button id="gc-swap">Swap locations</button></div></div><div class="gc-pane-footer">
       ${button('new-file', 'New file', writable)}${button('new-folder', 'New folder', writable)}${button('upload-button', 'Upload', writable)}<input id="gc-upload" class="gc-hidden" type="file">
       ${button('copy', 'Copy →', selection.length && destWritable)}${button('move', 'Move →', selection.length && writable && destWritable)}${button('delete', 'Delete', selection.length && writable, true)}${button('zip', 'Archive selection', selection.length && writable)}
@@ -1582,17 +1653,19 @@ Save settings, return here, then choose the new root in either pane. Paths such 
       Object.assign(this.state, this.panes[other]); this.panes[other] = current; this.render();
     });
     q('#gc-open-markdown')?.addEventListener('click', () => this.openFile(this.state.selected));
-    q('#gc-markdown-toggle')?.addEventListener('click', () => this.setState({ file: { ...this.state.file, editorMode: this.state.file.editorMode === 'raw' ? 'markdown' : 'raw' } }));
     this.shadowRoot.querySelectorAll('[data-markdown]').forEach(button => button.addEventListener('click', () => this.formatMarkdown(button.dataset.markdown)));
     q('#gc-new-file')?.addEventListener('click', () => this.createFile());
     q('#gc-upload-button')?.addEventListener('click', () => q('#gc-upload')?.click());
     q('#gc-duplicate')?.addEventListener('click', () => this.duplicateSelected());
+    q('#gc-permissions')?.addEventListener('click', () => this.editPermissions());
+    q('#gc-file-vault')?.addEventListener('click', () => this.openFileVault());
     q('#gc-preview')?.addEventListener('click', () => this.previewSelected());
     q('#gc-editor-close')?.addEventListener('click', () => this.discardEditor());
     q('#gc-editor-reload')?.addEventListener('click', async () => {
       const file = this.state.file;
       if (await this.discardEditor()) await this.openFile(file, file.root, file.editorMode);
     });
+    q('#gc-preview-close')?.addEventListener('click', () => this.setState({ file: { ...this.state.file, markdownPreview: null } }));
     q('#gc-validate')?.addEventListener('click', () => this.validateEditor());
     this.shadowRoot.querySelectorAll('[data-pane]').forEach(element => {
       const id = element.dataset.pane;
@@ -1609,6 +1682,15 @@ Save settings, return here, then choose the new root in either pane. Paths such 
         if (next) navigate(next.root, next.path, index);
       }));
       element.querySelectorAll('[data-crumb]').forEach(button => button.addEventListener('click', () => navigate(this.pane(id).root, button.dataset.crumb)));
+      element.querySelector('[data-show-hidden]').addEventListener('change', event => {
+        const pane = this.pane(id); pane.showHidden = event.target.checked;
+        // Keep visible selections; remove only newly hidden entries to avoid invisible destructive selections.
+        const authorized = new Set(pane.items.filter(item => pane.showHidden || !item.name.startsWith('.')).map(item => item.path));
+        pane.selection = pane.selection.filter(path => authorized.has(path));
+        if (pane.selected && !authorized.has(pane.selected.path)) pane.selected = null;
+        try { localStorage.setItem(this.preferenceKey, JSON.stringify({ left: this.pane('left').showHidden, right: this.pane('right').showHidden })); } catch {}
+        this.render(); this.shadowRoot.querySelector(`[data-pane="${id}"] [data-show-hidden]`)?.focus({ preventScroll: true });
+      });
       element.querySelector('[data-filter]').addEventListener('input', event => {
         const pane = this.pane(id); pane.filter = event.target.value;
         pane.selection = []; pane.selected = null; pane.anchor = null;
@@ -1644,7 +1726,8 @@ Save settings, return here, then choose the new root in either pane. Paths such 
         return;
       }
       if (this.state.busy) return;
-      if ((event.metaKey || event.ctrlKey) && ['b', 'i'].includes(event.key.toLowerCase()) && event.target.id === 'gc-editor' && this.state.file?.editorMode !== 'raw' && /^(md|markdown)$/.test(this.state.file?.extension)) { event.preventDefault(); this.formatMarkdown(event.key.toLowerCase() === 'b' ? 'bold' : 'italic'); return; }
+      if ((event.metaKey || event.ctrlKey) && ['z', 'y'].includes(event.key.toLowerCase()) && event.target.id === 'gc-editor') { event.preventDefault(); this.editorHistory(event.key.toLowerCase() === 'y' || event.shiftKey ? 'redo' : 'undo'); return; }
+      if ((event.metaKey || event.ctrlKey) && ['b', 'i'].includes(event.key.toLowerCase()) && event.target.id === 'gc-editor' && /^(md|markdown)$/.test(this.state.file?.extension)) { event.preventDefault(); this.formatMarkdown(event.key.toLowerCase() === 'b' ? 'bold' : 'italic'); return; }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's' && this.state.file?.editable) { event.preventDefault(); this.saveFile(); }
       if (event.key === 'F6') { event.preventDefault(); this.activatePane(this.activePane === 'left' ? 'right' : 'left'); this.shadowRoot.querySelector(`[data-pane="${this.activePane}"] .gc-table-wrap`)?.focus(); }
       if (event.key === 'Escape' && this.state.file) { event.preventDefault(); this.discardEditor(); }
@@ -1900,6 +1983,8 @@ Save settings, return here, then choose the new root in either pane. Paths such 
         .gc-root-boundary { display:flex; gap:8px; justify-content:space-between; align-items:center; font-size:12px; color:var(--gc-muted); }
         .gc-root-boundary span { min-width:0; overflow-wrap:anywhere; }
         .gc-root-boundary button { flex-shrink:0; font-size:12px; }
+        .gc-hidden-toggle { display:flex; align-items:center; gap:8px; min-height:40px; }
+        .gc-markdown-preview { width:100%; min-height:380px; border:1px solid var(--gc-border); border-radius:8px; }
         .gc-markdown-toolbar { display:flex; flex-wrap:wrap; gap:6px; padding-bottom:10px; }
         .gc-markdown-toolbar button { font-size:13px; }
         .gc-editor-card { min-width:0; }
@@ -1936,11 +2021,12 @@ Save settings, return here, then choose the new root in either pane. Paths such 
         <div class="gc-workspace">${this.paneHtml('left')}${this.paneHtml('right')}</div>
         ${this.workspaceActionsHtml(true)}
         ${file ? `<section class="gc-card gc-editor-card">
-          <div class="gc-head"><div class="gc-title"><h2>${file.preview ? 'Preview' : /^(md|markdown)$/.test(file.extension) && file.editorMode !== 'raw' ? 'Markdown editor' : 'Code / text editor'}</h2><p>${this.escape(file.root)}:/${this.escape(file.path)}</p></div><div class="gc-tools"><span id="gc-dirty" role="status">${this.isDirty() ? '● Unsaved changes' : 'Saved / read-only'}</span>${file.editable && /^(md|markdown)$/.test(file.extension) ? `<button id="gc-markdown-toggle">${file.editorMode === 'raw' ? 'Show Markdown tools' : 'Edit Raw'}</button>` : ''}<button id="gc-editor-reload">Reload from disk</button><button id="gc-editor-close">Close editor</button></div></div>
+          <div class="gc-head"><div class="gc-title"><h2>${file.preview ? 'Preview' : /^(md|markdown)$/.test(file.extension) ? 'Markdown source editor' : 'Code / text editor'}</h2><p>${this.escape(file.root)}:/${this.escape(file.path)}</p></div><div class="gc-tools"><span id="gc-dirty" role="status">${this.isDirty() ? '● Unsaved changes' : 'Saved / read-only'}</span><button id="gc-editor-reload">Reload from disk</button><button id="gc-editor-close">Close editor</button></div></div>
             <div class="gc-panel">
               ${file.preview === 'image' ? `<img class="gc-image-preview" src="${this.escape(this.previewUrl)}" alt="${this.escape(file.name)}">` : file.preview === 'archive' ? `<div class="gc-archive-preview"><strong>${file.entries.length} archive entries</strong><ul>${file.entries.map(entry => `<li>${this.escape(entry.name)} · ${this.escape(this.formatSize(entry.size))}</li>`).join('')}</ul></div>` : file ? `
                 ${this.isGravPageMarkdownPath(file.path) ? `<div class="gc-empty">This looks like a Grav page Markdown file. Use <button type="button" id="gc-open-grav-editor-inline">Open in Grav Editor</button> for the full page workflow, or continue here for raw Markdown editing.</div>` : ''}
                 ${this.markdownToolbarHtml(file)}
+                ${file.markdownPreview ? `<button id="gc-preview-close">Close preview</button><iframe class="gc-markdown-preview" title="Markdown preview" sandbox="" referrerpolicy="no-referrer" srcdoc="${this.escape(file.markdownPreview)}"></iframe>` : ''}
                 <textarea id="gc-editor" aria-label="File contents" spellcheck="false" ${file.editable ? '' : 'readonly'}>${this.escape(file.content || '')}</textarea>
                 <div class="gc-tools">
                   <button id="gc-save" class="primary" ${file.editable ? '' : 'disabled'}>${file.editable ? 'Save file' : 'Read-only preview'}</button>
@@ -2188,14 +2274,19 @@ Save settings, return here, then choose the new root in either pane. Paths such 
     this.shadowRoot.querySelector('#gc-save')?.addEventListener('click', () => this.saveFile());
     this.shadowRoot.querySelector('#gc-editor')?.addEventListener('input', event => {
       // Theme/notice rerenders must retain the unsaved buffer, never save it.
-      if (this.state.file) this.state.file = { ...this.state.file, content: event.target.value };
+      if (this.state.file) {
+        if (!this._historyApplying && this.state.file.content !== event.target.value) {
+          (this._editorUndo ||= []).push(this.state.file.content); if (this._editorUndo.length > 100) this._editorUndo.shift(); this._editorRedo = [];
+        }
+        this.state.file = { ...this.state.file, content: event.target.value };
+      }
       const label = this.shadowRoot.querySelector('#gc-dirty');
       if (label) label.textContent = this.isDirty() ? '● Unsaved changes' : 'Saved / read-only';
     });
     this.shadowRoot.querySelector('#gc-jarvis-provider')?.addEventListener('change', event => {
       if (this.state.file) this.state.file = { ...this.state.file, content: this.editorContent() };
       this.setState({ jarvisProvider: event.target.value, jarvisModels: [], jarvisModel: '', jarvisProposal: null, jarvisMessage: '', jarvisError: '' });
-      void this.loadJarvisModels();
+      void this.loadJarvisModels(false);
     });
     this.shadowRoot.querySelector('#gc-jarvis-model')?.addEventListener('change', event => {
       if (this.state.file) this.state.file = { ...this.state.file, content: this.editorContent() };

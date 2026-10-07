@@ -98,6 +98,8 @@ class GravCommanderPlugin extends Plugin
             $group->get('/read', [$controller, 'read']);
             $group->get('/download', [$controller, 'download']);
 
+            $group->post('/permissions', [$controller, 'changePermissions']);
+            $group->post('/markdown-preview', [$controller, 'previewMarkdown']);
             $group->post('/operations', [$controller, 'operate']);
             $group->post('/create', [$controller, 'createFile']);
             $group->post('/validate', [$controller, 'validate']);

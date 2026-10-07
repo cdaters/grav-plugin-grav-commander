@@ -31,6 +31,14 @@
 - Honor Jarvis's configured provider and named default through its public bootstrap;
   load models automatically and ignore stale responses after provider changes.
 
+- RC completion: independent remembered Show hidden files toggles, hidden by default,
+  with component-pattern protected paths enforced separately from visibility.
+- Always-visible Markdown tools in Edit Raw, H1/H2/H3, Undo/Redo, fenced code, table
+  and sandboxed preview; source validation and revision-bound Save remain intact.
+- Per-provider Jarvis catalog reuse and optional public File Vault status/native navigation.
+- Unix owner/group/mode display, informational warnings and guarded chmod with bounded
+  plans, explicit recursive confirmation and honest partial results. No ownership changes.
+
 ## 0.3.15 — 2026-10-05
 
 - Standardize ordinary Grav blueprint keywords for package search and shared repository Topics.

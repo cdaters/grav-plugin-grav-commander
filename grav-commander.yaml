@@ -30,6 +30,11 @@ archive:
 # Optional Admin2-configured external roots (or overrides by key).
 additional_roots: []
 
+# Glob patterns matched against each absolute path component; independent of visibility.
+protected_path_patterns: ['.ssh', '.gnupg', '.git', '.env', '.env.*', '*.pem', '*.key', '.aws', '.azure', '.kube', '.docker', '.netrc', '.npmrc', '.pypirc', '.htpasswd', '.git-credentials']
+permissions:
+  allow_chmod: true
+
 roots:
   pages:
     label: Pages

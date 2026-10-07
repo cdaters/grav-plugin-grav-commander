@@ -238,7 +238,12 @@ class FileService
 
         return [
             'plugin_version' => '0.4.0',
-            'integrations' => ['site_safeguard' => [
+            'permissions_supported' => PHP_OS_FAMILY !== 'Windows' && function_exists('fileperms'),
+            'chmod_supported' => $this->chmodSupported(),
+            'integrations' => ['file_vault' => [
+                'installed' => (bool) $this->grav['locator']->findResource('plugins://file-vault/blueprints.yaml', true),
+                'enabled' => (bool) $this->grav['config']->get('plugins.file-vault.enabled', false),
+            ], 'site_safeguard' => [
                 'installed' => (bool) $this->grav['locator']->findResource('plugins://site-safeguard/blueprints.yaml', true),
                 'enabled' => (bool) $this->grav['config']->get('plugins.site-safeguard.enabled', false),
             ]],
@@ -303,10 +308,11 @@ class FileService
 
             $full = $abs . '/' . $entry;
             $relative = $this->joinRelative($path, $entry);
-            if (is_link($full) || (!is_dir($full) && !is_file($full))) continue;
+            if (is_link($full) || $this->isProtectedPath($full) || (!is_dir($full) && !is_file($full))) continue;
             $isDir = is_dir($full);
             $items[] = [
                 'identity' => $this->identity($full),
+                'permissions' => $this->permissionInfo($full),
                 'name' => $entry,
                 'path' => $relative,
                 'type' => $isDir ? 'dir' : 'file',
@@ -514,6 +520,7 @@ class FileService
 
     private function inspectTree(string $abs, int &$count, int &$bytes): void
     {
+        $this->assertNotProtected($abs);
         if (is_link($abs) || (!is_file($abs) && !is_dir($abs))) throw new ForbiddenException('Symlinks and special files are not supported.');
         if (++$count > (int) ($this->config['max_operation_files'] ?? 10000)) throw new ValidationException('Operation file limit exceeded. Split the selection.');
         if (!is_readable($abs)) throw new ForbiddenException('Selection contains an unreadable item.');
@@ -826,6 +833,7 @@ class FileService
             throw new ValidationException('Choose a file or folder to zip. Zipping the root itself is intentionally disabled.');
         }
 
+        $count = 0; $bytes = 0; $this->inspectTree($abs, $count, $bytes);
         $parentRel = $this->parentRelative($path);
         $base = basename($abs);
         $zipName = trim($name) !== '' ? $this->sanitizeName($name) : $this->defaultArchiveName($base);
@@ -1068,6 +1076,7 @@ class FileService
     {
         $this->assertBackupEnabled();
         $abs = $this->resolve($root, $path, true);
+        $count = 0; $bytes = 0; $this->inspectTree($abs, $count, $bytes);
         $name = $this->backupFilename('file', $reason, $root, $path);
         $zipPath = $this->backupDir() . '/' . $name;
         $zip = $this->openZip($zipPath);
@@ -1285,6 +1294,16 @@ class FileService
         $target = $this->resolve($root, $path, false);
         $this->assertRootWritable($root);
 
+        // Validate every payload destination before backup/deletion, including protected descendants.
+        $prefix = 'payload/' . $payloadBase;
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $entry = $zip->getNameIndex($i);
+            if (!is_string($entry) || ($entry !== $prefix && !str_starts_with($entry, $prefix . '/'))) continue;
+            $this->assertZipEntryType($zip, $i);
+            if ($this->safeArchiveEntryName($entry) === null) throw new ForbiddenException('Unsafe backup entry.');
+            $sub = ltrim(substr($entry, strlen($prefix)), '/');
+            $this->assertInsideRoot($root, $target . ($sub !== '' ? '/' . $this->sanitizeRelative($sub) : ''));
+        }
         if (file_exists($target)) {
             $this->backupPath($root, $path, 'pre-restore');
             $this->deletePath($target);
@@ -1296,7 +1315,7 @@ class FileService
         for ($i = 0; $i < $zip->numFiles; $i++) {
             $stat = $zip->statIndex($i);
             $name = (string) ($stat['name'] ?? '');
-            if ($name === '' || $name === 'backup-info.json' || !str_starts_with($name, $prefix)) {
+            if ($name === '' || $name === 'backup-info.json' || ($name !== $prefix && !str_starts_with($name, $prefix . '/'))) {
                 continue;
             }
             $sub = ltrim(substr($name, strlen($prefix)), '/');
@@ -1438,6 +1457,102 @@ class FileService
         throw new ForbiddenException('Path is outside the configured root.');
     }
 
+
+    /** Component globs apply to canonical absolute paths, so alternate root aliases cannot bypass them. */
+    private function isProtectedPath(string $path): bool
+    {
+        $parts = explode('/', str_replace('\\', '/', $path));
+        foreach ((array) ($this->config['protected_path_patterns'] ?? []) as $pattern) {
+            if (!is_string($pattern) || $pattern === '') continue;
+            foreach ($parts as $part) if (fnmatch(strtolower($pattern), strtolower($part))) return true;
+        }
+        return false;
+    }
+
+    private function assertNotProtected(string $path): void
+    {
+        if ($this->isProtectedPath($path)) throw new ForbiddenException('This path is protected by Commander configuration.');
+    }
+
+    private function chmodSupported(): bool
+    {
+        return PHP_OS_FAMILY !== 'Windows' && function_exists('chmod') && (bool) ($this->config['permissions']['allow_chmod'] ?? true);
+    }
+
+    private function permissionInfo(string $path): ?array
+    {
+        if (PHP_OS_FAMILY === 'Windows' || !function_exists('fileperms')) return null;
+        $stat = @lstat($path);
+        if (!$stat) return null;
+        $mode = $stat['mode'] & 07777;
+        $symbolic = '';
+        foreach ([0400,0200,0100,0040,0020,0010,0004,0002,0001] as $i => $bit) $symbolic .= ($mode & $bit) ? 'rwx'[$i % 3] : '-';
+        foreach ([2 => 04000, 5 => 02000, 8 => 01000] as $i => $bit) if ($mode & $bit) $symbolic[$i] = ($mode & [2=>0100,5=>0010,8=>0001][$i]) ? ($i === 8 ? 't' : 's') : ($i === 8 ? 'T' : 'S');
+        $owner = function_exists('posix_getpwuid') ? posix_getpwuid($stat['uid']) : false;
+        $group = function_exists('posix_getgrgid') ? posix_getgrgid($stat['gid']) : false;
+        $warnings = []; $dir = is_dir($path); $name = strtolower(basename($path));
+        if ($mode & 0002) $warnings[] = 'World-writable: any local user may change this item.';
+        if ($dir && ($mode & 0111) !== 0111) $warnings[] = 'One or more classes lack directory search (execute) permission; access may fail.';
+        if (preg_match('/(?:config|backup|secret|credential|key)|\.(?:yaml|yml|ini|php)$/', $name) && ($mode & 0022)) $warnings[] = 'Configuration or sensitive-looking file is group/world writable.';
+        if (preg_match('/(?:secret|credential|private|backup)|\.(?:pem|key)$/', $name) && ($mode & 0077)) $warnings[] = 'Private-looking data is accessible to group or others.';
+        if (!$dir && preg_match('/\.(?:md|txt|json|ya?ml|css|jpe?g|png)$/', $name) && ($mode & 0111)) $warnings[] = 'Ordinary content has executable bits.';
+        return ['mode' => sprintf('%04o', $mode), 'symbolic' => $symbolic, 'owner' => $owner['name'] ?? (string) $stat['uid'], 'group' => $group['name'] ?? (string) $stat['gid'], 'warnings' => $warnings];
+    }
+
+    /** Bounded preflight, deepest entries first; stop and report exact partial results on failure. */
+    public function changePermissions(array $body): array
+    {
+        if (!$this->chmodSupported()) throw new ForbiddenException('Permission changes are unavailable or disabled on this runtime.');
+        $root = (string) ($body['root'] ?? ''); $path = (string) ($body['path'] ?? '');
+        $this->assertRootWritable($root);
+        $mode = (string) ($body['mode'] ?? '');
+        if (!preg_match('/^0?[0-7]{3}$/D', $mode)) throw new ValidationException('Use three octal digits, optionally prefixed by 0. Special bits are not supported.');
+        if ($this->sanitizeRelative($path) === '') throw new ForbiddenException('Choose an item inside the root, not the root itself.');
+        $abs = $this->resolve($root, $path, true);
+        $recursive = ($body['recursive'] ?? false) === true;
+        if ($recursive && (!is_dir($abs) || ($body['confirm_recursive'] ?? false) !== true)) throw new ValidationException('Recursive chmod requires a directory and separate explicit confirmation.');
+        $paths = [$path];
+        if ($recursive) {
+            $count = 0; $bytes = 0; $this->inspectTree($abs, $count, $bytes);
+            $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($abs, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::CHILD_FIRST);
+            $paths = [];
+            foreach ($iterator as $file) $paths[] = $this->relativeToRootBase($root, $file->getPathname());
+            $paths[] = $path;
+        }
+        $identities = [];
+        foreach ($paths as $entry) {
+            $target = $this->resolve($root, $entry, true); $stat = lstat($target);
+            $identities[$entry] = [$stat['dev'], $stat['ino'], $stat['mode']];
+        }
+        $revision = hash('sha256', json_encode([$root, $path, $mode, $recursive, $identities], JSON_THROW_ON_ERROR));
+        if (($body['preview'] ?? false) === true) return ['revision' => $revision, 'count' => count($paths)];
+        if (!is_string($body['revision'] ?? null) || !hash_equals($revision, $body['revision'])) throw new ValidationException('Permission targets changed. Review and confirm again.');
+        $completed = []; $failed = [];
+        foreach ($paths as $entry) {
+            try {
+                $target = $this->resolve($root, $entry, true); clearstatcache(true, $target); $stat = lstat($target);
+                if ([$stat['dev'], $stat['ino'], $stat['mode']] !== $identities[$entry]) throw new ValidationException('Item changed during permission update.');
+                if (!@chmod($target, octdec($mode))) throw new ValidationException('Filesystem refused chmod. Ownership or host policy may prevent changes.');
+                clearstatcache(true, $target);
+                if ((fileperms($target) & 07777) !== octdec($mode)) throw new ValidationException('Filesystem did not retain the requested mode.');
+                $completed[] = $entry;
+            } catch (\Throwable $error) { $failed[] = ['path' => $entry, 'message' => $error->getMessage()]; break; }
+        }
+        return ['message' => count($completed) . ' of ' . count($paths) . ' permission changes completed.', 'completed' => $completed, 'failed' => $failed, 'pending' => array_slice($paths, count($completed) + count($failed))];
+    }
+
+    public function previewMarkdown(array $body): array
+    {
+        $file = $this->read((string) ($body['root'] ?? ''), (string) ($body['path'] ?? ''));
+        if (!in_array($file['extension'], ['md','markdown'], true)) throw new ValidationException('Preview requires Markdown.');
+        $content = $body['content'] ?? null;
+        if (!is_string($content) || strlen($content) > (int) ($this->config['max_edit_size'] ?? 1048576)) throw new ValidationException('Preview exceeds the edit limit.');
+        // Plain Parsedown: no Grav/Twig execution, page includes or media processing.
+        $parser = new \Parsedown();
+        $parser->setSafeMode(true);
+        return ['html' => $parser->text($content)];
+    }
+
     private function configuredRoots(): array
     {
         $roots = $this->config['roots'] ?? [];
@@ -1525,6 +1640,7 @@ class FileService
         $base = $this->rootBase($root);
         $relative = $this->sanitizeRelative($path);
         $target = $relative === '' ? $base : $base . '/' . $relative;
+        $this->assertNotProtected($target);
         $probe = $base;
         foreach (explode('/', $relative) as $component) {
             if ($component === '') continue;
@@ -1539,7 +1655,9 @@ class FileService
         }
 
         $this->assertInsideBase($base, $target, $mustExist || $relative === '');
-        return realpath($target) ?: $target;
+        $canonical = realpath($target) ?: $target;
+        $this->assertNotProtected($canonical);
+        return $canonical;
     }
 
     private function assertInsideRoot(string $root, string $target): void
@@ -1549,6 +1667,7 @@ class FileService
 
     private function assertInsideBase(string $base, string $target, bool $mustExist): void
     {
+        $this->assertNotProtected($target);
         $baseReal = realpath($base) ?: $base;
         $probe = $target;
         while ($probe !== $base && $probe !== dirname($probe)) {
@@ -1868,6 +1987,7 @@ class FileService
 
     private function addPathToZip(ZipArchive $zip, string $abs, string $zipPath, bool $siteMode = false, ?array &$stats = null, ?string $profileKey = null): void
     {
+        if (!$siteMode) $this->assertNotProtected($abs);
         if (is_link($abs) || (!is_dir($abs) && !is_file($abs))) {
             throw new ForbiddenException('Symlinks and special files are not supported.');
         }
@@ -2460,6 +2580,8 @@ class FileService
 
     private function copyRecursive(string $src, string $dst): void
     {
+        $this->assertNotProtected($src);
+        $this->assertNotProtected($dst);
         if (is_link($src) || (!is_dir($src) && !is_file($src))) {
             throw new ForbiddenException('Symlinks and special files are not supported.');
         }
@@ -2482,6 +2604,7 @@ class FileService
 
     private function deletePath(string $abs): void
     {
+        $this->assertNotProtected($abs);
         if (is_link($abs) || (!is_dir($abs) && !is_file($abs))) {
             throw new ForbiddenException('Symlinks and special files are not supported.');
         }

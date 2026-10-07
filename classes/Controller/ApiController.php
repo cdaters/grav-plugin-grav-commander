@@ -33,7 +33,14 @@ class ApiController extends AbstractApiController
     public function status(ServerRequestInterface $request): ResponseInterface
     {
         $this->requireCommanderPermission($request, 'grav-commander.browse');
-        return ApiResponse::create($this->service()->status());
+        $data = $this->service()->status();
+        $data['can_write'] = false;
+        try {
+            $this->requireCommanderPermission($request, 'grav-commander.write');
+            $data['can_write'] = true;
+        } catch (ApiException) { /* Display only; mutation repeats the full permission gate. */ }
+        $data['preference_key'] = hash('sha256', (string) $this->getUser($request)->username);
+        return ApiResponse::create($data);
     }
 
     public function roots(ServerRequestInterface $request): ResponseInterface
@@ -74,6 +81,19 @@ class ApiController extends AbstractApiController
         $this->requireFields($body, ['root', 'path']);
         if (!isset($body['content']) || !is_string($body['content'])) throw new ValidationException('Content must be text.');
         return ApiResponse::create($this->service()->write((string) $body['root'], (string) $body['path'], (string) $body['content'], isset($body['revision']) ? (string) $body['revision'] : null));
+    }
+
+    public function changePermissions(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requireCommanderPermission($request, 'grav-commander.browse');
+        $this->requireCommanderPermission($request, 'grav-commander.write');
+        return ApiResponse::create($this->service()->changePermissions($this->getRequestBody($request)));
+    }
+
+    public function previewMarkdown(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->requireCommanderPermission($request, 'grav-commander.browse');
+        return ApiResponse::create($this->service()->previewMarkdown($this->getRequestBody($request)));
     }
 
     public function operate(ServerRequestInterface $request): ResponseInterface

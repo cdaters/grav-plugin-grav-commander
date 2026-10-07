@@ -10,7 +10,9 @@ Backup/restore and optional public-contract Jarvis integration remain available.
 polish adds configurable external roots, preferred optional Site Safeguard handoff,
 accessible themed dialogs, editor focus/native Grav actions, consistent controls and
 reviewed collision policies with folder merge and replacement safety backups. Physical
-root guidance, Markdown formatting tools and automatic Jarvis defaults/catalogs are included.
+root guidance, remembered hidden-file switches, clickable Unix modes, Markdown tools,
+automatic compatible editor selection and Jarvis defaults/catalogs are included. Optional
+File Vault navigation uses public metadata; direct Revision Ledger checkpoints are not integrated.
 
 ## Future increments
 

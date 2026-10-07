@@ -6,7 +6,6 @@
     "admin",
     "admin2",
     "backup",
-    "developer",
     "editor",
     "media",
     "file",
@@ -14,7 +13,9 @@
     "archive",
     "restore",
     "schedule",
-    "grav2"
+    "grav2",
+    "permissions",
+    "markdown"
   ],
   "license": "MIT",
   "authors": [

@@ -252,7 +252,7 @@ class GravCommanderPage extends HTMLElement {
     this.state = { ...this.state, ...patch };
     this.render();
     if (focusId && !this.state.modal) {
-      const next = this.shadowRoot.querySelector('#' + focusId); next?.focus({ preventScroll: true });
+      const next = this.shadowRoot.querySelector('#' + CSS.escape(focusId)); next?.focus({ preventScroll: true });
       if (selection && next?.setSelectionRange) { next.setSelectionRange(selection[0], selection[1]); next.scrollTop = selection[2]; }
     }
 
@@ -323,6 +323,10 @@ class GravCommanderPage extends HTMLElement {
     return (fields || []).map(field => {
       const e = value => this.escape(value);
       const attrs = `id="gc-modal-${e(field.name)}" name="${e(field.name)}" ${field.required ? 'required' : ''}`;
+      if (field.type === 'permissions') {
+        const mode = parseInt(field.value, 8);
+        return `<fieldset class="gc-permission-bits"><legend>Read, write and execute</legend><div class="gc-bit-grid"><span></span><span>Read</span><span>Write</span><span>Execute</span>${['Owner', 'Group', 'Other'].map((who, index) => `<strong>${who}</strong>${[4, 2, 1].map((bit, b) => { const mask = bit << (6 - index * 3); return `<input type="checkbox" data-mode-bit="${mask}" aria-label="${who} ${['read', 'write', 'execute'][b]}" ${mode & mask ? 'checked' : ''}>`; }).join('')}`).join('')}</div></fieldset><label class="gc-modal-field" for="gc-modal-${e(field.name)}"><span>${e(field.label)}</span><input type="text" ${attrs} value="${e(field.value)}" inputmode="numeric" pattern="0?[0-7]{3}" maxlength="4"></label>`;
+      }
       const control = field.type === 'select' ? `<select ${attrs}>${field.options.map(([value, label]) => `<option value="${e(value)}" ${field.value === value ? 'selected' : ''}>${e(label)}</option>`).join('')}</select>` : field.type === 'checkbox' ? `<input type="checkbox" ${attrs} ${field.value ? 'checked' : ''}>` : `<input type="text" ${attrs} value="${e(field.value || '')}">`;
       return `<label class="gc-modal-field" for="gc-modal-${e(field.name)}"><span>${e(field.label)}</span>${control}</label>`;
     }).join('');
@@ -612,23 +616,22 @@ Save settings, return here, then choose the new root in either pane. Paths such 
     }, 'Rendering Markdown preview…');
   }
 
-  async editPermissions() {
-    const item = this.state.selected, root = this.state.root;
+  async editPermissions(item = this.state.selected, root = this.state.root) {
     if (!item?.permissions) return;
     const info = item.permissions;
     const supported = this.state.status?.chmod_supported && this.state.status?.can_write && this.state.roots.find(r => r.key === root)?.writable;
     const message = `${item.path}\nOwner: ${info.owner} · Group: ${info.group}\n${info.mode} ${info.symbolic}\n${info.warnings.join('\n')}\n\n${supported ? 'Use octal rwx bits: owner / group / others. Special bits are not supported. Changing modes can make content inaccessible.' : 'Informational only. Permission changes are unsupported, disabled, or require Commander write authority.'}`;
-    const fields = supported ? [{ name: 'mode', label: 'Octal mode (owner / group / others)', value: info.mode, required: true }, { name: 'preset', label: 'Preset (optional)', type: 'select', value: '', options: [['','Use octal entry'],['0644','0644 · public file'],['0600','0600 · private file'],['0755','0755 · directory / executable'],['0700','0700 · private directory']] }, ...(item.type === 'dir' ? [{ name: 'recursive', label: 'Apply recursively to every file and directory (may break access)', type: 'checkbox' }] : [])] : null;
+    const fields = supported ? [{ name: 'mode', type: 'permissions', label: 'Octal mode (owner / group / others)', value: info.mode, required: true }, { name: 'preset', label: 'Preset (optional)', type: 'select', value: '', options: [['','Use octal entry'],['0644','0644 · public file'],['0600','0600 · private file'],['0755','0755 · directory / executable'],['0700','0700 · private directory']] }, ...(item.type === 'dir' ? [{ name: 'recursive', label: 'Apply recursively to every file and directory (may break access)', type: 'checkbox' }] : [])] : null;
     const answer = await this.confirmModal({ title: 'Unix permissions', message, fields, okText: supported ? 'Review change' : 'Close' });
     if (!answer || !supported) return;
-    const mode = answer.preset || answer.mode;
+    const mode = answer.mode;
     if (!/^0?[0-7]{3}$/.test(mode)) { this.setState({ error: 'Use an octal mode such as 0644 or 0755.' }); return; }
     const body = { root, path: item.path, mode, recursive: !!answer.recursive, confirm_recursive: !!answer.recursive };
     await this.guard(async () => {
       const plan = await this.api('/grav-commander/permissions', { method: 'POST', body: JSON.stringify({ ...body, preview: true }) });
       if (!await this.confirmModal({ title: answer.recursive ? 'Confirm recursive chmod' : 'Confirm permission change', message: `${plan.count} item(s) will receive ${mode}. ${answer.recursive ? 'The SAME mode applies to all descendants, including files. Missing directory execute bits can prevent browsing; executable bits on content may be unsafe. There is no automatic undo.' : ''}`, okText: 'Apply permissions', danger: true })) return;
       const result = await this.api('/grav-commander/permissions', { method: 'POST', body: JSON.stringify({ ...body, revision: plan.revision }) });
-      await this.loadList(false);
+      await this.refreshPanes(true);
       this.setState({ message: result.message, error: result.failed?.length ? `${result.failed[0].path}: ${result.failed[0].message} · ${result.pending?.length || 0} pending` : '' });
     }, 'Updating permissions…');
   }
@@ -1621,11 +1624,13 @@ Save settings, return here, then choose the new root in either pane. Paths such 
     }, 'Loading folder…');
   }
 
-  async refreshPanes() {
+  async refreshPanes(preserveSelection = false) {
     const snapshots = ['left', 'right'].map(id => ({ id, root: this.pane(id).root, path: this.pane(id).path }));
     await Promise.all(snapshots.map(async ({ id, root, path }) => {
       const data = await this.api(`/grav-commander/list?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`);
-      Object.assign(this.pane(id), { items: data.items || [], selected: null, selection: [] });
+      const pane = this.pane(id), items = data.items || [];
+      const selection = preserveSelection ? pane.selection.filter(path => items.some(item => item.path === path)) : [];
+      Object.assign(pane, { items, selection, selected: selection.length === 1 ? items.find(item => item.path === selection[0]) : null });
     }));
     this.render();
   }
@@ -1760,13 +1765,12 @@ Save settings, return here, then choose the new root in either pane. Paths such 
       <div class="gc-pane-nav">
         <select aria-label="${id} root" data-root id="gc-root${suffix}">${this.state.roots.map(root => `<option value="${e(root.key)}" ${root.key === pane.root ? 'selected' : ''} ${root.exists === false ? 'disabled' : ''}>${e(root.label)}${root.writable ? '' : ' (read-only)'}</option>`).join('')}</select>
         <div class="gc-root-boundary"><span>${pane.path ? 'Root' : 'At configured root'}: <code>${e(rootInfo?.absolute_path || rootInfo?.path || pane.root)}</code></span><button data-configure-roots type="button">Configure roots</button></div>
-        <div class="gc-tools"><button data-history="-1" aria-label="${id} back" ${pane.historyIndex > 0 ? '' : 'disabled'}>←</button><button data-history="1" aria-label="${id} forward" ${pane.historyIndex < pane.history.length - 1 ? '' : 'disabled'}>→</button><button data-up ${pane.path ? '' : 'disabled'}>Up</button><button data-refresh>Refresh</button></div>
-        <label class="gc-hidden-toggle"><input type="checkbox" data-show-hidden aria-label="${id} show hidden files" ${pane.showHidden ? 'checked' : ''}>Show hidden files</label>
+        <div class="gc-tools"><button data-history="-1" aria-label="${id} back" ${pane.historyIndex > 0 ? '' : 'disabled'}>←</button><button data-history="1" aria-label="${id} forward" ${pane.historyIndex < pane.history.length - 1 ? '' : 'disabled'}>→</button><button data-up ${pane.path ? '' : 'disabled'}>Up</button><button data-refresh>Refresh</button><label class="gc-hidden-toggle"><input type="checkbox" role="switch" data-show-hidden aria-label="${id} show hidden files" ${pane.showHidden ? 'checked' : ''}><span class="gc-switch-track" aria-hidden="true"></span><span>Show hidden files</span></label></div>
         <nav class="gc-crumbs" aria-label="${id} breadcrumbs">${breadcrumbs.map(crumb => `<button data-crumb="${e(crumb.path)}">${e(crumb.label)}</button>`).join('<span>/</span>')}</nav>
         <div class="gc-path-row"><input type="text" data-path id="gc-path${suffix}" aria-label="${id} folder path" title="Path relative to this configured root; use the root selector for another location" value="${e(pane.path)}" placeholder="Folder path"><button data-go id="gc-go${suffix}">Go</button></div>
         <div class="gc-path-row"><input type="text" data-filter aria-label="${id} filename filter" value="${e(pane.filter)}" placeholder="Filter this folder…"><select data-sort aria-label="${id} sort">${['name','size','modified'].map(key => `<option ${pane.sort === key ? 'selected' : ''}>${key}</option>`).join('')}</select><button data-reverse aria-label="${id} reverse sort">${pane.reverse ? '↓' : '↑'}</button></div>
       </div>
-      <div class="gc-table-wrap" tabindex="0" role="region" aria-label="${id} directory listing"><table aria-label="${id} files"><thead><tr><th>Name</th><th>Size</th><th>Modified</th></tr></thead><tbody>${items.map(item => `<tr data-entry="${e(item.path)}" class="${pane.selection?.includes(item.path) ? 'selected' : ''}" aria-selected="${!!pane.selection?.includes(item.path)}"><td><input type="checkbox" data-toggle aria-label="Toggle ${e(item.name)}" ${pane.selection?.includes(item.path) ? 'checked' : ''}><button class="gc-file-entry gc-name" aria-label="Select ${e(item.name)}"><span aria-hidden="true">${pane.selection?.includes(item.path) ? '✓' : this.iconFor(item)}</span>${e(item.name)}</button><small>${e(item.identity?.kind || (item.type === 'dir' ? 'Folder' : item.extension))}</small></td><td>${e(this.formatSize(item.size))}</td><td>${e(this.formatDate(item.modified))}</td></tr>`).join('')}</tbody></table>${items.length ? '' : '<div class="gc-empty">No matching items.</div>'}</div>
+      <div class="gc-table-wrap" tabindex="0" role="region" aria-label="${id} directory listing"><table aria-label="${id} files"><thead><tr><th>Name</th><th>Size</th><th>Modified</th><th>Permissions</th></tr></thead><tbody>${items.map(item => `<tr data-entry="${e(item.path)}" class="${pane.selection?.includes(item.path) ? 'selected' : ''}" aria-selected="${!!pane.selection?.includes(item.path)}"><td><input type="checkbox" data-toggle aria-label="Toggle ${e(item.name)}" ${pane.selection?.includes(item.path) ? 'checked' : ''}><button class="gc-file-entry gc-name" aria-label="Select ${e(item.name)}"><span aria-hidden="true">${pane.selection?.includes(item.path) ? '✓' : this.iconFor(item)}</span>${e(item.name)}</button><small>${e(item.identity?.kind || (item.type === 'dir' ? 'Folder' : item.extension))}</small></td><td>${e(this.formatSize(item.size))}</td><td>${e(this.formatDate(item.modified))}</td><td>${item.permissions ? `<button type="button" class="gc-mode" data-permissions id="gc-mode-${id}-${e(encodeURIComponent(item.path))}" aria-label="Permissions for ${e(item.name)}: ${e(item.permissions.mode)}" title="View or change Unix permissions">${e(item.permissions.mode)}</button>` : '<span title="Unix permissions unavailable">—</span>'}</td></tr>`).join('')}</tbody></table>${items.length ? '' : '<div class="gc-empty">No matching items.</div>'}</div>
       <div class="gc-pane-footer"><button data-select-all>Select all visible</button><button data-clear>Clear</button><span class="gc-muted-small">${items.length} visible</span></div>
     </section>`;
   }
@@ -1777,7 +1781,7 @@ Save settings, return here, then choose the new root in either pane. Paths such 
     const destination = this.pane(this.activePane === 'left' ? 'right' : 'left');
     const destWritable = this.state.roots.find(root => root.key === destination.root)?.writable;
     const button = (id, label, enabled = true, danger = false) => `<button id="gc-${id}" ${enabled ? '' : 'disabled'} ${danger ? 'class="danger"' : ''}>${label}</button>`;
-    if (contextual) return item ? `<section class="gc-card"><div class="gc-pane-footer">${item ? `${button('open', item.type === 'dir' ? 'Open folder' : item.editable ? 'Edit' : 'View', item.type === 'dir' || item.viewable)}${item.archive || /\.(png|jpe?g|gif|webp|avif)$/i.test(item.name) ? button('preview', item.archive ? 'Inspect archive' : 'Preview image') : ''}${item.extractable && writable ? button('extract', 'Extract ZIP') : ''}${button('rename', 'Rename', writable)}${button('duplicate', 'Duplicate', writable)}${item.type !== 'dir' ? button('download', 'Download') : ''}${button('backup-file', 'Backup item')}${item.permissions ? button('permissions', 'Permissions') : ''}${item.type !== 'dir' && this.fileVaultStatus ? button('file-vault', 'Manage distribution in File Vault') : ''}` : ''}</div>${item ? `<div class="gc-footer-note">${this.escape(item.identity?.kind || item.type)} · ${this.escape(item.path)} · ${this.escape(this.formatSize(item.size))} · ${this.escape(this.formatDate(item.modified))}${item.permissions ? ' · ' + this.escape(item.permissions.mode + ' ' + item.permissions.symbolic + ' · ' + item.permissions.owner + ':' + item.permissions.group) : ''}${/package/.test(item.identity?.kind || '') ? ' · Moving package files may affect the installed extension.' : ''}</div>` : ''}</section>` : '';
+    if (contextual) return item ? `<section class="gc-card"><div class="gc-pane-footer">${item ? `${button('open', item.type === 'dir' ? 'Open folder' : item.editable ? 'Edit' : 'View', item.type === 'dir' || item.viewable)}${item.archive || /\.(png|jpe?g|gif|webp|avif)$/i.test(item.name) ? button('preview', item.archive ? 'Inspect archive' : 'Preview image') : ''}${item.extractable && writable ? button('extract', 'Extract ZIP') : ''}${button('rename', 'Rename', writable)}${button('duplicate', 'Duplicate', writable)}${item.type !== 'dir' ? button('download', 'Download') : ''}${button('backup-file', 'Backup item')}${item.type !== 'dir' && this.fileVaultStatus ? button('file-vault', 'Manage distribution in File Vault') : ''}` : ''}</div>${item ? `<div class="gc-footer-note">${this.escape(item.identity?.kind || item.type)} · ${this.escape(item.path)} · ${this.escape(this.formatSize(item.size))} · ${this.escape(this.formatDate(item.modified))}${item.permissions ? ' · ' + this.escape(item.permissions.mode + ' ' + item.permissions.symbolic + ' · ' + item.permissions.owner + ':' + item.permissions.group) : ''}${/package/.test(item.identity?.kind || '') ? ' · Moving package files may affect the installed extension.' : ''}</div>` : ''}</section>` : '';
     return `<section class="gc-card"><div class="gc-head"><div class="gc-title"><strong>${this.escape(this.state.root)}:/${this.escape(this.state.path)} → ${this.escape(destination.root)}:/${this.escape(destination.path)}</strong><p>${selection.length} selected · click, Cmd/Ctrl-click or Shift-click · F6 changes pane</p></div><div class="gc-tools">${button('switch-pane', 'Switch pane')}<button id="gc-swap">Swap locations</button></div></div><div class="gc-pane-footer">
       ${button('new-file', 'New file', writable)}${button('new-folder', 'New folder', writable)}${button('upload-button', 'Upload', writable)}<input id="gc-upload" class="gc-hidden" type="file">
       ${button('copy', 'Copy →', selection.length && destWritable)}${button('move', 'Move →', selection.length && writable && destWritable)}${button('delete', 'Delete', selection.length && writable, true)}${button('zip', 'Archive selection', selection.length && writable)}
@@ -1799,7 +1803,6 @@ Save settings, return here, then choose the new root in either pane. Paths such 
     q('#gc-new-file')?.addEventListener('click', () => this.createFile());
     q('#gc-upload-button')?.addEventListener('click', () => q('#gc-upload')?.click());
     q('#gc-duplicate')?.addEventListener('click', () => this.duplicateSelected());
-    q('#gc-permissions')?.addEventListener('click', () => this.editPermissions());
     q('#gc-file-vault')?.addEventListener('click', () => this.openFileVault());
     q('#gc-preview')?.addEventListener('click', () => this.previewSelected());
     q('#gc-editor-close')?.addEventListener('click', () => this.discardEditor());
@@ -1842,6 +1845,16 @@ Save settings, return here, then choose the new root in either pane. Paths such 
       element.querySelector('[data-reverse]').addEventListener('click', () => { this.pane(id).reverse = !this.pane(id).reverse; this.render(); });
       element.querySelector('[data-select-all]').addEventListener('click', () => { this.activatePane(id, false); this.state.selection = this.visibleItems().map(item => item.path); this.state.selected = this.state.selection.length === 1 ? this.visibleItems()[0] : null; this.render(); });
       element.querySelector('[data-clear]').addEventListener('click', () => { this.activatePane(id, false); this.state.selection = []; this.state.selected = null; this.render(); });
+      element.querySelectorAll('[data-permissions]').forEach(button => {
+        button.addEventListener('click', event => {
+          event.stopPropagation();
+          if (this.state.busy) return;
+          button.focus({ preventScroll: true });
+          const pane = this.pane(id);
+          this.editPermissions(pane.items.find(item => item.path === button.closest('[data-entry]').dataset.entry), pane.root);
+        });
+        button.addEventListener('dblclick', event => event.stopPropagation());
+      });
       element.querySelectorAll('[data-entry]').forEach(row => {
         row.addEventListener('click', event => this.selectItem(id, row.dataset.entry, event.target.matches('[data-toggle]') ? { ctrlKey: true } : event));
         row.addEventListener('dblclick', () => { this.activatePane(id, false); this.openItem(this.state.items.find(item => item.path === row.dataset.entry)); });
@@ -1887,7 +1900,7 @@ Save settings, return here, then choose the new root in either pane. Paths such 
   }
 
   paneKeydown(event, id) {
-    if (this.state.busy || this.state.modal || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) return;
+    if (this.state.busy || this.state.modal || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || (event.target.closest('button') && !event.target.closest('.gc-name'))) return;
     const key = event.key.toLowerCase(), mod = event.metaKey || event.ctrlKey;
     const handled = ['arrowdown','arrowup','enter','backspace','delete','f2','escape'].includes(key) || (mod && ['a','c','x','v'].includes(key));
     if (!handled) return;
@@ -2131,7 +2144,17 @@ Save settings, return here, then choose the new root in either pane. Paths such 
         .gc-root-boundary { display:flex; gap:8px; justify-content:space-between; align-items:center; font-size:12px; color:var(--gc-muted); }
         .gc-root-boundary span { min-width:0; overflow-wrap:anywhere; }
         .gc-root-boundary button { flex-shrink:0; font-size:12px; }
-        .gc-hidden-toggle { display:flex; align-items:center; gap:8px; min-height:40px; }
+        .gc-hidden-toggle { position:relative; display:inline-flex; align-items:center; gap:8px; min-height:40px; cursor:pointer; white-space:nowrap; }
+        .gc-hidden-toggle input { position:absolute; width:36px; height:22px; margin:0; opacity:0; cursor:pointer; }
+        .gc-switch-track { width:36px; height:22px; border-radius:12px; background:var(--gc-muted); display:inline-block; flex-shrink:0; pointer-events:none; }
+        .gc-switch-track::after { content:''; display:block; width:18px; height:18px; margin:2px; border-radius:50%; background:#fff; }
+        .gc-hidden-toggle input:checked + .gc-switch-track { background:var(--gc-primary); }
+        .gc-hidden-toggle input:checked + .gc-switch-track::after { transform:translateX(14px); }
+        .gc-hidden-toggle input:focus-visible + .gc-switch-track { outline:3px solid var(--gc-primary); outline-offset:3px; }
+        .gc-mode { font-family:ui-monospace,monospace; color:var(--gc-primary); text-decoration:underline; text-underline-offset:3px; background:transparent; border-color:transparent; }
+        .gc-permission-bits { border:1px solid var(--gc-border); border-radius:8px; margin:16px 0; }
+        .gc-bit-grid { display:grid; grid-template-columns:1fr repeat(3,1fr); align-items:center; gap:10px; text-align:center; white-space:normal; }
+        .gc-bit-grid input { justify-self:center; accent-color:var(--gc-primary); }
         .gc-markdown-preview { width:100%; min-height:380px; border:1px solid var(--gc-border); border-radius:8px; }
         .gc-markdown-toolbar { display:flex; flex-wrap:wrap; gap:6px; padding-bottom:10px; }
         .gc-markdown-toolbar button { font-size:13px; }
@@ -2396,6 +2419,20 @@ Save settings, return here, then choose the new root in either pane. Paths such 
   bindEvents(parent) {
     this.shadowRoot.querySelector('#gc-modal-cancel')?.addEventListener('click', () => this.closeModal(false));
     this.shadowRoot.querySelector('#gc-modal-form')?.addEventListener('submit', event => { event.preventDefault(); this.closeModal(true); });
+    const modeInput = this.shadowRoot.querySelector('#gc-modal-mode');
+    const modeBits = [...this.shadowRoot.querySelectorAll('[data-mode-bit]')];
+    const presetInput = this.shadowRoot.querySelector('#gc-modal-preset');
+    if (modeInput && modeBits.length) {
+      const sync = (value, clearPreset = true) => {
+        modeInput.value = value;
+        this.state.modal.fields.find(field => field.name === 'mode').value = value;
+        for (const bit of modeBits) bit.checked = /^0?[0-7]{3}$/.test(value) && !!(parseInt(value, 8) & Number(bit.dataset.modeBit));
+        if (clearPreset) { presetInput.value = ''; this.state.modal.fields.find(field => field.name === 'preset').value = ''; }
+      };
+      modeInput.addEventListener('input', () => sync(modeInput.value));
+      presetInput.addEventListener('change', () => { if (presetInput.value) sync(presetInput.value, false); });
+      for (const bit of modeBits) bit.addEventListener('change', () => sync('0' + modeBits.reduce((mode, bit) => mode | (bit.checked ? Number(bit.dataset.modeBit) : 0), 0).toString(8).padStart(3, '0')));
+    }
     this.shadowRoot.querySelectorAll('#gc-modal-form [name]').forEach(input => input.addEventListener('input', () => { const field = this.state.modal?.fields?.find(field => field.name === input.name); if (field) field.value = input.type === 'checkbox' ? input.checked : input.value; }));
     this.shadowRoot.querySelector('#gc-safeguard')?.addEventListener('click', async () => { if (await this.discardEditor()) window.location.href = `${this.adminBasePath()}/plugin/site-safeguard`; });
 

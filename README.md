@@ -1,571 +1,292 @@
 # Grav Commander
 
-Release 0.4.0 is a Grav-native file and site operations workspace for Admin2.
-
-## Hidden files and protected paths
-
-Each pane has its own **Show hidden files** toggle, off by default. Preferences are
-remembered per authenticated user in this browser when local storage is available.
-Toggling preserves paths/history and visible selections; selections that become hidden
-are removed to prevent invisible destructive actions. Ordinary dotfiles/folders in
-external roots behave the same way. A selected folder still includes authorized hidden
-contents when copied or archived.
-
-Visibility is not authorization. `protected_path_patterns` matches glob patterns against
-each canonical absolute path component (case-insensitive), including alternate root aliases. Defaults deny
-`.ssh`, `.gnupg`, `.git`, `.env`, `.env.*`, `*.pem`, `*.key`, and common cloud/package-manager credential stores (`.aws`, `.azure`, `.kube`, `.docker`, `.netrc`, `.npmrc`, `.pypirc`, `.htpasswd`, `.git-credentials`). Administrators can change
-these patterns in plugin settings. Denied items are omitted from listings and refused
-by direct file operations, recursive operations and file-backup restore. Full-site backup
-profiles retain their separate backup/restore authority and can contain sensitive data;
-protect access to the Backup Center and stored archives.
-
-## Unix permissions
-
-Select an item to see owner/group, octal mode and rwx bits; **Permissions** opens details
-and informational warnings for world-writable items, sensitive-looking data, missing
-directory search bits and executable content. This is not a complete security audit.
-
-On supported Unix runtimes, Commander write authority plus a writable configured root
-allows chmod. Enter three octal rwx digits (optional leading zero), or use 0644/0600 file
-and 0755/0700 directory presets. Recursive changes need a directory, an explicit checkbox,
-and a second warning/confirmation. The same mode applies to every descendant; use care
-with execute bits. Bounded preflight rejects protected/symlink paths and stale plans.
-Partial failures report completed, failed and pending paths; chmod has no automatic undo.
-Set `permissions.allow_chmod: false` to retain informational display only. Windows or
-runtimes without chmod cannot offer mutation. PHP ownership and host policy may still
-refuse a mode change. No chown/chgrp or special-bit mutation is provided.
-
-## Optional File Vault integration
-
-An installed, enabled File Vault with a successful permission-checked public status
-response adds **Manage distribution in File Vault** for selected files. Known managed
-items are matched by public storage path/filename metadata; their public status fields
-show ACL, password protection and download count. Continue in File Vault's native UI.
-Commander never auto-publishes or duplicates a file. Server-file adoption, generalized
-managed-file lookup and item-specific deep links remain deferred until File Vault exposes
-stable contracts. An unknown match is not claimed to be unmanaged.
-
-## Workspace quickstart
-
-Each pane has its own root, folder, breadcrumbs, back/forward history, filename
-filter and sort order. Click an item or the pane heading to choose the active
-**Source**; the other pane is the **Destination**. Copy and Move show both locations
-and the selected paths before submitting one coordinated request. At widths under
-850px, use **Switch pane** (or F6) to work with one location at a time.
-
-Click selects, checkboxes or Cmd/Ctrl-click toggle, Shift-click selects a range, and **Select all
-visible** selects the current filtered list. Changing the filter clears selection,
-so hidden files cannot accidentally be included. Folders include their contents and
-associated page media. Duplicate asks for a new name beside the original; numbered
-page folders retain their full contents. Rename does not renumber other pages.
-
-New file creates an empty allowed text file (JSON starts as `{}`). New folder works
-at the root too. Upload accepts one file at a time, including desktop drops onto a
-pane. Archive selection creates one ZIP in the active folder; download that ZIP for
-a multi-item download. ZIP inspection lists bounded entries before extraction.
-Image previews support PNG/JPEG/GIF/WebP/AVIF up to 10 MB. Active content is never
-rendered as HTML; text and archive names are escaped.
-
-The editor stays open while either pane navigates. It records the file's own root,
-path and SHA-256 revision. Save validates YAML, JSON and Markdown frontmatter;
-external disk changes require reload/review. Close, replacement, native editor
-launch, sidebar navigation and browser unload guard unsaved edits. Reload requires
-confirmation if dirty. Jarvis Apply still updates only the unsaved buffer.
-
-Keyboard shortcuts apply inside a file listing: arrows navigate/select, Enter opens,
-Backspace goes up, F2 renames, Delete confirms deletion, Cmd/Ctrl+A selects visible
-items, Cmd/Ctrl+C/X records copy/move intent, and Cmd/Ctrl+V operates in the focused
-pane. F6 switches panes; Cmd/Ctrl+S saves an editable buffer; Escape cancels dialogs
-or closes the editor with dirty protection. Text inputs keep ordinary editing keys.
-
-Copy/move defaults to **Ask** when a destination exists. Choose **Skip**, **Replace**,
-**Keep both / Rename**, or **Cancel**, with an option to apply the choice to remaining
-compatible collisions. Cancel stops the entire transfer before mutation. Keep both
-accepts a new name or generates a unique one. **Merge folders** retains destination-only
-items and reviews child collisions; **Replace** replaces the whole destination and
-requires recursive deletion to be enabled for nonempty folders. Skipped move items
-remain at the source. Replacement first stages the source and makes a safety backup
-when `auto_backup_on_write` and `backup.enabled` are enabled. Backup filenames cannot
-reuse an existing archive, including multiple backups in the same second.
-
-The entire selection is checked before mutation, including duplicate/overlapping paths
-and recursive-delete policy. Decisions are bound to source/destination revisions;
-changes while reviewing a collision require a fresh review. Nothing silently overwrites. Defaults
-limit a request to 200 selected paths, 10,000 descendants and 512 MiB; advanced
-configuration keys are `max_operation_files` and `max_operation_bytes`. Split larger
-work into smaller operations. Paths stay inside configured roots; symlinks, special
-files, root mutations and self-descendant destinations are rejected. Permissions,
-API scope/demo restrictions, blocked formats, pre-destructive backups and guarded
-restore remain enforced on the server.
-
-Batches are coordinated, **not filesystem transactions**. A later I/O failure can
-leave earlier items completed; Commander reports completed, failed and unattempted
-items. A partial copy may remain at its destination. Reload both locations and review
-before retrying. Keep the workspace open during operations: status is indeterminate,
-not a fabricated percentage, and server work cannot be cancelled from the browser.
-No persistent/background job queue is claimed.
-
-Grav-aware labels identify page folders/media, plugin/theme package contents and
-configuration. **Edit**, Enter and double-click automatically select the highest-priority
-installed, enabled and authorized provider that explicitly supports the format/context.
-Caxton is the preferred built-in optional Markdown provider. Other plugins can register
-public compatible providers; equal priorities sort by ID. There is no editor chooser.
-
-Grav-page Markdown falls back to the native Grav page editor. Ordinary Markdown falls
-back to Commander Markdown tools; YAML/JSON/Twig/CSS/JavaScript/HTML/TXT use an explicitly
-compatible safe provider or Commander source editing. Read-only files remain in Commander.
-Caxton Source mode respects its separate permission. Unsupported or failed providers
-are skipped; runtime failures preserve the acknowledged unsaved buffer locally.
-
-Commander keeps file policy, validation, revision-bound Save, dirty guards, focus/scroll
-and Jarvis context. Providers receive only a canonical unsaved string in an isolated
-iframe, with no filesystem identity, credentials or network access. Loading an editor
-never saves. Native-page fallback retains the normal Admin2 page workflow and ACLs.
-The small [public editor-adapter contract](docs/EDITOR-ADAPTERS.md) uses Admin2's existing
-custom field API without importing private provider components or rebuilding Caxton.
-
-The fallback Markdown toolbar includes Undo/Redo, H1/H2/H3, emphasis, lists, quote,
-inline/fenced code, links/images, rule, table and sandboxed safe preview. Code formats
-keep appropriate source behavior. Jarvis remains the Commander-owned bounded buffer
-workflow; provider-specific page media/AI controls are omitted for arbitrary files.
-
-App-owned prompts and confirmations use themed, keyboard-accessible Commander dialogs
-with focus trapping, Escape and return focus. Browser tab/window unload protection
-still uses the browser's required native before-unload mechanism. Commander does
-not rewrite page links, route overrides, plugin registrations or theme dependencies
-when files move. Review those site relationships before moving package/page folders.
-
-Syntax highlighting, line-number gutters, cross-pane drag/drop, recursive search,
-semantic refactoring, and resumable background jobs remain future work. The workspace
-inherits Admin2 Light, Dark and Follow OS preferences.
-
-
-Grav Commander is an Admin2-first file manager, archive toolkit, and guarded Backup Center for Grav 2.
-
-It is intentionally cautious. Grav Commander is meant to help trusted administrators handle common file, ZIP, and backup work from inside Admin2 without turning Grav into an unchecked hosting control panel.
-
-## Status / Alpha Notice
-
-Grav Commander is alpha software for Grav 2 and Admin2. Use it locally or on staging first, review the configured roots and permissions, and keep independent server backups for production sites.
-
-## Screenshots
-
-### Dark Mode
-
-| Plugin Settings | Plugin Settings, continued |
-|:---:|:---:|
-| <img src="docs/screenshots/grav-commander-dm-plugin.png" alt="Grav Commander plugin settings in dark mode" width="100%" /> | <img src="docs/screenshots/grav-commander-dm-plugin2.png" alt="Additional Grav Commander plugin settings in dark mode" width="100%" /> |
-
-| Files | Backup Center |
-|:---:|:---:|
-| <img src="docs/screenshots/grav-commander-dm-files.png" alt="Grav Commander Files screen in dark mode" width="100%" /> | <img src="docs/screenshots/grav-commander-dm-backup.png" alt="Grav Commander Backup Center in dark mode" width="100%" /> |
-
-| Backup Center, continued |
-|:---:|
-| <img src="docs/screenshots/grav-commander-dm-backup2.png" alt="Additional Grav Commander Backup Center view in dark mode" width="100%" /> |
-
-### Light Mode
-
-| Plugin Settings | Plugin Settings, continued |
-|:---:|:---:|
-| <img src="docs/screenshots/grav-commander-lm-plugin.png" alt="Grav Commander plugin settings in light mode" width="100%" /> | <img src="docs/screenshots/grav-commander-lm-plugin2.png" alt="Additional Grav Commander plugin settings in light mode" width="100%" /> |
-
-| Files | Backup Center |
-|:---:|:---:|
-| <img src="docs/screenshots/grav-commander-lm-files.png" alt="Grav Commander Files screen in light mode" width="100%" /> | <img src="docs/screenshots/grav-commander-lm-backup.png" alt="Grav Commander Backup Center in light mode" width="100%" /> |
-
-| Backup Center, continued |
-|:---:|
-| <img src="docs/screenshots/grav-commander-lm-backup2.png" alt="Additional Grav Commander Backup Center view in light mode" width="100%" /> |
-
-## Features
-
-- Admin2 sidebar page with Files and Backups sections.
-- Configured root browser for pages, themes, plugins, config, data, and logs.
-- Text file viewing and editing with extension allow/block lists.
-- Upload, download, rename, copy, move, delete, and folder creation actions.
-- ZIP creation and guarded ZIP extraction.
-- Backup profiles with friendly and expert editing modes.
-- Manual site, file, and folder backups.
-- Safety backups before destructive file operations when enabled.
-- Backup notes, manifests, health checks, details modal, download, delete, and guarded restore.
-- Scheduled backup definitions mirrored into Grav scheduler custom jobs.
-- CLI backup command for cron, SSH, or scheduled workflows.
-- Optional Jarvis assistance for bounded eligible text files, with provider/
-  model discovery, explicit preview, and unsaved-buffer-only Apply.
-
-## Requirements
-
-- Grav 2.0 or newer.
-- Grav API plugin 1.0.44 or newer.
-- Admin2 / admin-next.
-- PHP 8.3 or newer.
-- PHP `zip` extension for archive, backup, and restore tools.
-- Server cron running `bin/grav scheduler` if scheduled backups should run automatically.
-
-## Installation
-
-Install the plugin into:
-
-```text
-user/plugins/grav-commander
-```
-
-The plugin folder should contain at least:
-
-```text
-grav-commander.php
-blueprints.yaml
-grav-commander.yaml
-permissions.yaml
-admin-next/pages/grav-commander.js
-cli/BackupCommand.php
-classes/
-```
-
-Enable the plugin through Admin2 or in `user/config/plugins/grav-commander.yaml`:
-
-```yaml
-enabled: true
-```
-
-Clear the Grav cache after installing or updating:
-
-```bash
-bin/grav clearcache
-```
-
-Open Admin2 and look for **Grav Commander** in the sidebar.
-
-## Configuration
-
-Default configuration lives in `grav-commander.yaml`. Site-specific overrides belong in:
-
-```text
-user/config/plugins/grav-commander.yaml
-```
-
-Important settings include:
-
-```yaml
-admin:
-  show_sidebar: true
-
-max_upload_size: 10485760
-max_edit_size: 1048576
-allow_php_editing: false
-allow_recursive_delete: false
-auto_backup_on_write: true
-
-jarvis:
-  enabled: true
-  max_context_bytes: 49152
-  max_large_context_bytes: 196608
-
-backup:
-  enabled: true
-  path: ../gcmdr_backups
-  max_backups: 25
-  allow_site_restore: false
-```
-
-The default backup path is `../gcmdr_backups`, resolved relative to the Grav root. On many hosts this places backups beside the public site directory rather than inside it. For production, prefer an absolute or relative path outside the public web tree when your host allows it.
-
-Grav Commander creates the backup folder when needed and writes basic `.htaccess` and `index.html` protection files, but outside-root storage is still preferred.
-
-## Permissions
-
-The plugin declares these permissions in `permissions.yaml`:
-
-```yaml
-grav-commander:
-  browse: true
-  write: true
-  backup: true
-  restore: true
-```
-
-Super admin users should have access automatically. For non-super users, grant only the capabilities they need:
-
-- `browse`: list, view, and download allowed files.
-- `write`: create, edit, upload, rename, copy, move, delete, zip, and extract inside writable roots.
-- `backup`: create, list, download, configure, run, and delete backups.
-- `restore`: restore file/folder backups and, only if enabled, full-site backups.
-
-## File Manager Behavior
-
-Configured roots are defined under `roots` in site plugin configuration. The Admin2
-plugin settings also expose **Additional or overridden filesystem roots** (`additional_roots`):
+Release 0.4.0 of Grav Commander puts a two-pane file manager and Backup Center inside Grav 2's
+Admin2. Browse your site's files, copy between folders, edit text, manage ZIPs and
+make backups without leaving the administrator interface.
+
+Commander is for trusted administrators. Start on a staging site, give users only
+the access they need, and keep an independent backup before changing a live site.
+
+## Install or upgrade
+
+You need **Grav 2**, **Admin2 (admin-next)**, **API 1.0.44 or newer**, **PHP 8.3 or
+newer**, and PHP's **ZIP extension** for archives, backups and restores.
+
+1. Download the Commander release ZIP from the
+   [releases page](https://github.com/cdaters/grav-plugin-grav-commander/releases).
+   For a release candidate, use the supplied RC ZIP.
+2. Extract its `grav-commander` folder into `user/plugins/grav-commander` in your
+   Grav installation. Avoid a second nested `grav-commander` folder.
+3. Enable **Grav Commander** in Admin2's Plugins settings. Clear the Grav cache
+   from Admin2, or run `bin/grav clearcache` from the Grav directory.
+4. Open **Grav Commander** in the Admin2 sidebar. Its **Settings** button opens
+   the plugin's configuration.
+
+To upgrade, back up the site and replace the plugin folder with the new release.
+Keep your site configuration in `user/config/plugins/grav-commander.yaml`; changes
+made directly to the plugin's own default YAML are replaced by an update. Clear
+the cache and reload Admin2 afterward. Review the [changelog](CHANGELOG.md) and
+try editing, copying and a backup on staging before using an upgrade on a live site.
+
+## Set up access and locations
+
+Commander separates administrator access into four permissions:
+
+| Permission | Allows |
+| --- | --- |
+| `grav-commander.browse` | Browse, view and download permitted files. |
+| `grav-commander.write` | Create, edit, upload, rename, copy, move, delete, archive and change modes in writable locations. |
+| `grav-commander.backup` | Create, manage, download and delete backups; configure profiles and schedules. |
+| `grav-commander.restore` | Restore backups, subject to restore settings and confirmations. |
+
+Grant these through your site's user/group access settings. API super authority
+also grants access; legacy `admin.super` alone is not enough for API operations.
+Read-only roots and the host's own filesystem permissions still apply.
+
+### Configured roots
+
+A **root** is an administrator-approved starting folder. Defaults include Pages,
+Themes, Plugins, Config, Data and read-only Logs. Each pane chooses its own root.
+The physical server path is shown below the root selector.
+
+**Up stops at the selected root.** To reach the Grav installation or a server-home
+folder above it, add that location in **Settings → Additional or overridden
+filesystem roots**. **Configure roots** in either pane provides guidance and a
+link to these settings. For example:
 
 ```yaml
 additional_roots:
+  - key: site
+    label: Grav installation
+    path: .
+    writable: false
   - key: server-home
     label: Server home
     path: /home/datersne
     writable: false
 ```
 
-The Files pane displays the configured root's physical path. **Up** stops at that
-boundary; a relative Folder path cannot navigate above it. Choose **Configure roots**
-for setup guidance and a link to the native plugin settings. Add a `site` entry with
-path `.` to expose the Grav installation (often `public_html`). Add an explicit absolute
-server-home path to expose its parent. Save settings and return to Commander, then
-select the new root independently in either pane. Do not omit the leading `/` on
-absolute hosting paths.
-
-An additional entry with a built-in key overrides that root. Additional keys must be
-unique. Paths may be site-relative or absolute; directories must already exist and
-be accessible to PHP. Enable writes only for roots administrators intend to modify.
-Each pane chooses independently from this configured allowlist. Invalid roots are
-unavailable. Root paths are canonicalized; a full filesystem root, symlink root,
-unknown root, absolute request path, traversal, symlink descendant or special file
-is rejected. A server-home root does not permit navigating to its parent.
-
-When Site Safeguard is installed, enabled and its public status endpoint authorizes
-the current user, Backup Center presents **Open Site Safeguard** as the preferred
-advanced backup/stage/restore workflow. This opens its native Admin2 page; Safeguard
-retains its own permissions, staging and confirmation gates. Commander imports no
-Safeguard internals and its existing backups remain functional without Safeguard.
-
-Files are handled in three broad modes:
-
-- Editable: allowed by `editable_extensions`, not blocked, inside a writable root, writable on disk, and below `max_edit_size`.
-- View/read-only: allowed by `viewable_extensions`, not blocked, and text-like.
-- Binary/read-only: selectable and downloadable, but not opened in the editor.
-
-Executable and server-side script extensions are blocked by default:
-
-```yaml
-blocked_extensions:
-  - php
-  - phtml
-  - phar
-  - sh
-  - bash
-  - zsh
-  - exe
-```
-
-Do not remove risky extensions from `blocked_extensions` on production sites unless every Admin user with access is fully trusted.
-
-Markdown files under the Pages root can be opened in Grav's page editor. Raw text editing remains available for power users.
-
-## Optional Jarvis actions
-
-When `grav-jarvis` is installed and enabled, Commander can consume its
-public PHP service for one bounded file at a time. Jarvis is optional: removing,
-disabling, or misconfiguring it hides or fails only the Jarvis panel. Browsing,
-editing, archives, backups, and every other Commander feature continue to work.
-
-Eligible text/source files receive these actions:
-
-- Explain, Summarize, and Review return read-only results.
-- Improve / Rewrite and Custom Prompt may return a complete proposal when the
-  file is editable and the source was neither truncated nor redacted.
-- Markdown Summarize may use Jarvis's public bounded chunk/synthesis contract.
-  Explain and Review visibly truncate above the direct-context limit. Improve
-  and Custom Prompt reject partial-file rewriting.
-
-Commander reads the preferred provider and its named default model from Jarvis's
-public `/grav-jarvis/bootstrap` API when the current user can access it. Model discovery
-starts automatically when an eligible editor opens and when the provider changes;
-**Refresh models** retries discovery. Catalog failures retain the configured default,
-and late responses from a previous provider cannot replace the current selection.
-This metadata loading does not generate content or save files. If bootstrap metadata
-is unavailable, Commander keeps its existing public-service fallback.
-
-The panel lets the user select a registered text provider, use its configured
-default model or discover a neutral model catalog, validate configuration
-without generation, run an action, inspect context limits and normalized
-usage/cost/retry/cache information, then Copy, Reject, or explicitly Apply.
-Browser requests cannot select a provider class, endpoint, header, credential,
-or environment-variable name.
-
-Apply means **apply to the current unsaved Commander editor buffer**. It does
-not call the write endpoint. A hash-only 15-minute receipt binds the actor,
-configured root, relative path, disk modified/size version, source buffer, and
-proposal. Cross-user, cross-file, changed-source, changed-disk, expired,
-rejected, and replayed application fails closed. The normal **Save file**
-button remains the only way to persist that buffer and retains Commander's
-existing write permission and safety-backup behavior.
-
-Both permission families are mandatory on the backend:
-
-- Explain, Summarize, Review, provider validation, and model discovery require
-  `grav-commander.browse` plus `grav-jarvis.use`.
-- Improve / Rewrite, Custom Prompt, and Apply additionally require
-  `grav-commander.write`.
-
-Commander reuses only `Grav\Plugin\GravJarvis\Contracts` and
-`$grav['gravJarvis']`. It does not read Jarvis configuration, credentials,
-providers, transport, cache, retry, budget, chunking implementation, Admin
-services, or test fixtures.
-
-The disclosure policy is deliberately conservative. `.env` files, account/
-credential/secret/private-key locations, private-key bodies, unsupported or
-binary files are refused. High-confidence credential assignments and bearer/
-token values in otherwise eligible text are replaced with `[REDACTED]`, and a
-redacted result can never be applied. This bounded policy is a guardrail, not a
-general secret scanner; operators should still review the visible context and
-avoid sending sensitive files to any provider.
-
-## Archive Tools
-
-Archive tools currently focus on ZIP files:
-
-- Create a ZIP from a selected file or folder.
-- Upload a `.zip` file and extract it under the selected root.
-- Extract to the ZIP's current folder or another path under the same root.
-- Keep no-overwrite extraction by default.
-- Optionally allow overwrite through plugin configuration.
-- Guard against absolute paths and parent-directory traversal in ZIP entries.
-- Optionally skip common macOS ZIP clutter such as `__MACOSX`, `.DS_Store`, and `._filename`.
-
-Relevant defaults:
-
-```yaml
-archive:
-  enabled: true
-  allow_create: true
-  allow_extract: true
-  allow_overwrite: false
-  backup_before_extract: true
-  max_extract_files: 5000
-  max_extract_bytes: 209715200
-  skip_macos_junk: true
-```
-
-## Backup Center
-
-The Backup Center provides profile-driven site backups and safety backups for file operations.
-
-Default profiles:
-
-- `full_site`: the Grav root, excluding cache/log/temp/backup folders.
-- `user_folder`: the `user/` folder.
-- `pages_media`: `user/pages` only.
-- `config_data`: `user/config`, `user/accounts`, and `user/data`.
-
-Backups include `backup-info.json`, and site backups also include a manifest. Backup notes and metadata can be reviewed from the backup row info button.
-
-Backup file names use a configurable token template:
-
-```yaml
-backup:
-  archive_name_template: gcmdr-[HOST]-[PROFILE]-[DATE]-[TIME_TZ]
-  add_random_if_inside_site_root: true
-```
-
-The `.zip` extension is added automatically. If backups are configured inside the site root and `[RANDOM]` is not in the template, Grav Commander can add a random suffix as a guardrail.
-
-Full-site restore is disabled by default:
-
-```yaml
-backup:
-  allow_site_restore: false
-```
-
-Leave full-site restore disabled unless you are intentionally testing or recovering a site.
-
-## Scheduled Backups
-
-Schedules are edited in the Backup Center and saved to the plugin configuration. When schedules are saved, Grav Commander mirrors managed jobs into:
-
-```text
-user/config/scheduler.yaml
-```
-
-Managed job IDs use the `grav-commander-backup-` prefix.
-
-Example cron expressions:
-
-```text
-0 * * * *      hourly at minute 0
-0 3 * * *      daily at 3:00 AM
-0 3 * * 1      weekly Monday at 3:00 AM
-0 3 1 * *      monthly on the 1st at 3:00 AM
-```
-
-The server must still run Grav's scheduler from system cron, for example:
-
-```bash
-* * * * * cd /path/to/grav && bin/grav scheduler 1>> /dev/null 2>&1
-```
-
-Without that host-level cron entry, schedules can be saved but will not run automatically.
-
-## CLI Usage
-
-Create a backup with a configured profile:
-
-```bash
-bin/plugin grav-commander backup --profile=pages_media --reason=manual-cli --note="Before content edits"
-```
-
-Options:
-
-```text
---profile, -p   Backup profile key. Default: full_site
---reason, -r    Reason stored in metadata. Default: cli
---note          Optional note stored in metadata.
-```
-
-Scheduled backup jobs use the same command internally.
-
-## Security Notes
-
-- Treat file management, archive extraction, backup download, and restore as trusted-admin features.
-- Keep `blocked_extensions` conservative.
-- Keep backups outside the public site root when possible.
-- Use dedicated permissions for non-super users.
-- Keep full-site restore disabled unless actively needed.
-- Test restores on staging before relying on production recovery.
-- Backup download links use short-lived, one-time tokens requested by an authenticated Admin2 session, then stream through a token-only browser download route.
-- Jarvis is optional and receives only the current bounded eligible buffer
-  after backend containment, sensitivity, permission, provider-validation, and
-  capability checks. Provider credentials remain environment-only in Jarvis.
-- Jarvis output is untrusted text. Review it before Apply and again before Save.
-- Basic `.htaccess` protection helps Apache, but Nginx, Caddy, and other servers need server-level rules if backups are exposed under the web root.
-
-## Known Limitations
-
-- Grav 2 and Admin2 are still moving targets.
-- The editor is intentionally simple and is not yet a full code editor.
-- ZIP support is currently limited to ZIP archives.
-- Long-running large backups depend on PHP and hosting limits.
-- Scheduler jobs require host cron; saving a schedule alone is not enough.
-- Full-site restore is intentionally guarded and should be considered a recovery tool, not a deployment system.
-  Large backup downloads stream through a tokenized browser route so the browser can handle the ZIP directly without loading the full archive into Admin2 JavaScript memory.
-- Jarvis does not analyze directories, binary/media contents, multiple files,
-  selections, or site-wide context. It has no autonomous file write, job, MCP,
-  or background workflow in Commander.
-- Proposal Apply and ordinary editor Save both detect changed disk content; Apply
-  remains separate from the explicit Save action.
-
-## Roadmap Link
-
-See [ROADMAP.md](ROADMAP.md) for directional plans.
-
-## Contributing / Feedback
-
-Issues, testing notes, and focused pull requests are welcome at:
-
-```text
-https://github.com/cdaters/grav-plugin-grav-commander/issues
-```
-
-Grav Commander is maintained by Craig Daters. PixelWizard may appear in community context, but project metadata uses the professional author name.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
-
-## Current API authorization
-
-API/Admin2 operations require API plugin **1.0.44 or newer**. The API permission resolver enforces API-key scopes, group grants and demo restrictions. Grant the documented plugin permissions plus `api.access`, or use `api.super` for a trusted API administrator. Legacy `admin.super` alone is not API authority. Keep API keys narrowly scoped; no permission bypass is provided by this plugin.
-
-## Distribution
-
-0.4.0 is a separate immutable release candidate. Existing public release bytes
-remain unchanged. Authoritative development uses the deterministic public export;
-release publication and repository catalog promotion are separate operator actions.
+Save settings, return to Commander and choose the new root. `.` means the Grav
+installation; `/home/datersne` is an absolute server path, including its leading
+slash. If your site's folder is `/home/datersne/public_html`, choosing Server home
+lets you enter `public_html` and return to its parent with Up.
+
+Folders must already exist and be accessible to PHP. Use unique keys; a built-in
+key replaces that root's definition. Leave broad external roots read-only unless
+writes are necessary. They may contain other sites and private account data.
+Commander does not grant unrestricted server access: requests stay within the
+selected configured root, and symlinks, protected paths and the filesystem root
+itself are refused.
+
+### Hidden files
+
+Each pane has a **Show hidden files** switch beside Back, Forward, Up and Refresh.
+It starts off and remembers that pane's choice for your user in that browser.
+Switching it keeps the folder, history and visible selections. Selected items
+that become hidden are deselected to prevent accidental operations on them.
+
+The switch reveals ordinary names starting with a dot. It does **not** unlock
+protected files: credential locations such as `.ssh`, `.env` and private keys
+remain denied. Copying or archiving a selected folder includes its permitted
+hidden contents even when they are not displayed. See
+[configuration and safety settings](docs/CONFIGURATION.md) for protected patterns.
+
+## Work with two panes
+
+1. Choose the starting root and folder in each pane.
+2. Click a file or a pane heading to make that pane the active **Source**.
+   The other pane is the **Destination**.
+3. Select items and choose **Copy →** or **Move →**. Review both locations before
+   continuing. Copy leaves the originals; Move removes successfully moved originals.
+
+Click selects one item. Checkboxes or Cmd/Ctrl-click select several; Shift-click
+selects a range. **Select all visible** follows the pane's filename filter.
+Changing the filter clears its selection. Back/Forward, breadcrumbs and the folder
+path work independently in each pane; folder paths are relative to the chosen root.
+**Swap locations** exchanges the pane locations. On narrow screens, **Switch pane**
+or F6 changes the visible pane.
+
+### Files, folders and ZIPs
+
+- **New file**, **New folder** and **Upload** use the active folder. Upload or drop
+  one file at a time onto a pane.
+- Select one item for **Rename**, **Duplicate**, **Download** or **Backup item**.
+  Duplicate creates another copy beside the original using the name you enter.
+- **Delete** asks for confirmation. Nonempty folders require recursive deletion
+  to be enabled in settings. There is no trash bin or automatic undo.
+- **Archive selection** creates a ZIP in the active folder. Download it to collect
+  several files together. Select a ZIP to inspect its entries or extract it.
+  Extraction refuses overwrites by default and has separate safety settings.
+- Supported images have **Preview image**; text files use **Edit** or **View**.
+
+Folders include their contents and page media. Moving a page, plugin or theme does
+not repair links, route overrides or dependencies; review those relationships first.
+Large operations are limited by Commander and your host. Keep the workspace open
+until the result appears. If an operation stops partway through, review the reported
+completed, failed and pending items before retrying: earlier changes may remain.
+
+### When a destination already exists
+
+Copy and Move use **Ask** by default. Review each collision and choose:
+
+| Choice | Result |
+| --- | --- |
+| Skip | Keep both existing locations unchanged for that item. |
+| Replace | Replace the destination item, including its contents if it is a folder. |
+| Keep both / Rename | Enter another name or leave it blank for a unique name. |
+| Merge folders | Keep destination-only items and review conflicts inside the folders. |
+| Cancel | Stop the whole transfer before it starts. |
+
+You can apply a decision to remaining compatible collisions. Replace and Merge
+appear only when allowed; replacing a nonempty folder requires recursive deletion.
+Nothing silently overwrites. Configured safety backups run before replacement.
+If the files change during review, Commander requires a new review.
+
+## Edit files
+
+Select a file and click **Edit**, press Enter, or double-click it. Commander chooses
+the best available compatible editor automatically; there is no editor picker.
+
+- **Grav page Markdown:** a compatible installed editor, with Caxton preferred by
+  the built-in integration; otherwise the native Grav page editor.
+- **Other Markdown:** a compatible installed editor, otherwise Commander's Markdown
+  toolbar and source area.
+- **YAML, JSON, Twig, CSS, JavaScript, HTML and text:** an editor that explicitly
+  supports that format safely, otherwise Commander's source editor.
+
+Available providers are checked for enabled status, compatibility and your access,
+then ordered by priority. Failed providers fall back safely. Installing an editor
+alone does not make it compatible; it must support the public adapter contract.
+
+The Commander editor scrolls into view and receives focus. Its open file stays
+attached to its original location while you browse either pane. Markdown fallback
+includes headings, emphasis, lists, links, code, tables, undo/redo and a safe preview.
+Source editing is plain text; the fallback does not provide syntax highlighting or
+line numbers. HTML/Twig are edited as source, not executed in the preview.
+
+**Save file** validates YAML, JSON and Markdown frontmatter before writing.
+**Validate document** checks without saving. If the file changed on disk since it
+was opened, Save is refused: review your edits, then **Reload from disk** as needed.
+Closing or replacing an unsaved editor asks before discarding changes. The native
+Grav page editor follows its own normal page editing and validation workflow.
+
+Read-only roots, file size limits, blocked formats and host permissions may limit a
+file to viewing or downloading. Server scripts such as PHP and shell scripts are
+blocked by default. Do not loosen that policy for untrusted users.
+
+## Linux and Unix file permissions
+
+The **Permissions** column shows values such as **0644** or **0755**. Click the
+value itself to open the permissions dialog; selecting the file first is unnecessary.
+It shows the owner and group, readable permission details and applicable warnings.
+
+Permissions describe what the **owner**, members of the **group**, and **other**
+users can do. Read means read a file or list a directory. Write means change a file
+or change entries in a directory. Execute means run a file; for a directory it means
+enter or pass through it. Directory access often needs both read and execute.
+
+Use the read/write/execute boxes, a preset or the octal entry; they stay in sync.
+Common presets are `0644` for publicly readable files, `0600` for private files,
+`0755` for accessible directories and `0700` for private directories. These are
+examples, not a substitute for your hosting provider's ownership and access guidance.
+
+Changes require Commander write access, a writable root, enabled permission changes
+and a supported Unix host. Otherwise the dialog is informational. A dash means Unix
+mode information is unavailable. Commander does not change ownership or special bits.
+
+**Recursive** applies the same mode to every file and folder below a directory.
+It needs an explicit selection and a second confirmation. Removing directory execute
+bits can lock out access; adding execute bits to content may be unsafe. There is no
+automatic undo. Prefer targeted changes, and review any partial failure report.
+
+## Backups and recovery
+
+Use **Backup item** for a selected file/folder, or the **Backups** tab for a site
+backup. Choose a profile, add a useful note and run the backup. Default profiles
+cover the full site, user folder, pages/media, and configuration/data. Review the
+backup's details, health information and included paths before relying on it.
+
+Safety backups are enabled by default before supported destructive file operations,
+including replacement. Keep both `auto_backup_on_write` and `backup.enabled` enabled
+to use them. They do not undo chmod or replace an independent recovery backup.
+
+Backups default to `../gcmdr_backups`, beside the Grav directory. Store them outside
+the publicly served web directory and restrict access: site backups may contain
+accounts and secrets, including data hidden from the Files tab. Retention defaults
+to 25 backups; download important recovery copies to separate storage.
+
+Restore requires restore access and confirmation. File backups return to their
+recorded configured root and path. Full-site restore is **disabled by default** and
+requires `backup.allow_site_restore: true`. Test recovery on staging first and make
+a separate current backup before restoring. Restore may overwrite current content;
+it is not a deployment or automatic rollback system.
+
+Backup Center can save profiles and schedules. **Saving a schedule does not make it
+run:** your host must run Grav's scheduler from cron. See
+[advanced configuration, schedules and CLI backup](docs/CONFIGURATION.md).
+
+## Optional integrations
+
+Commander works on its own. Unavailable integrations simply do not appear: controls
+are shown only when their integration is available and your access permits it.
+
+| Integration | What to expect |
+| --- | --- |
+| Compatible editors / Caxton | Automatic editing for supported files. Caxton must be enabled and allow Markdown field replacement. Its Source mode also requires its own permission. Other editors can implement the [public adapter](docs/EDITOR-ADAPTERS.md). |
+| Jarvis | Assistance for one eligible open text file. Commander uses Jarvis's configured provider/default model and loads model choices automatically. Explain, Summarize and Review give feedback; rewrite proposals require review and **Apply**, then a separate **Save file**. Apply only changes the unsaved buffer. Review context before sending it to a provider; limits and redaction are not a complete secret scanner. |
+| Site Safeguard | **Open Site Safeguard** in Backups is the preferred advanced backup, staging and restore workflow when available. Its own access and confirmations still apply. Commander backups work without it. |
+| File Vault | **Manage distribution in File Vault** opens its native management screen. Known managed files can show access, password and download details. Commander does not automatically import, copy or publish the selected file. |
+| Revision Ledger | Use its normal page-history workflow when saving in the native Grav page editor. Commander 0.4.0 has no direct Ledger history control; direct Commander file saves (including embedded editors), moves and deletes do not create Ledger checkpoints. Use Commander backups for those operations. |
+
+## Keyboard and appearance
+
+These shortcuts apply while a file listing has focus; text inputs keep normal editing keys.
+
+| Shortcut | Action |
+| --- | --- |
+| Up / Down arrows | Move the selection. |
+| Enter | Open the selected folder or automatically edit/view the file. |
+| Backspace | Go up within the configured root. |
+| F2 | Rename the selected item. |
+| Delete | Review deletion of the selection. |
+| Cmd/Ctrl+A | Select visible items. |
+| Cmd/Ctrl+C / X | Remember selected items for copy / move. |
+| Cmd/Ctrl+V | Copy / move into the focused pane's folder, with review. |
+| F6 | Switch panes. |
+| Cmd/Ctrl+S | Save the open editable buffer. |
+| Escape | Cancel a dialog; clear listing selection or close the editor with an unsaved-change check, depending on focus. |
+
+Tab reaches controls, including mode values and hidden-file switches. Enter opens a
+focused permission value; Space toggles a focused switch. Dialogs keep keyboard
+focus inside and return it when closed. Commander follows Admin2's **Light**, **Dark**
+or **Follow OS** appearance. Leaving a browser tab with unsaved work may also show
+the browser's own required leave-page warning.
+
+## Troubleshooting
+
+- **Commander is missing:** check that the plugin and sidebar setting are enabled,
+  Admin2/API meet the requirements, and your user has browse access. Clear the cache.
+- **Cannot go above Pages/public_html:** add an approved broader root in settings,
+  then select it. Typing `..` or an absolute path into Folder path does not bypass roots.
+- **Root unavailable or access denied:** check the server path, its leading slash,
+  PHP access, read-only setting and protected patterns. Symlink roots are not supported.
+- **Dotfile still absent:** turn on that pane's switch. Protected items remain hidden;
+  a filename filter may also exclude the item. Browser storage restrictions can prevent
+  remembering the switch.
+- **Cannot edit or save:** check write access, format/size limits and host permissions.
+  Fix validation errors. For a stale-save warning, preserve your draft and compare it
+  with the disk version before reloading.
+- **Optional editor or Jarvis missing:** check that plugin's enablement, permissions
+  and compatibility. Jarvis's **Refresh models** retries discovery; a failed catalog
+  request can still leave its configured default selected.
+- **Backup/extraction fails:** check PHP ZIP support, free space, storage permissions
+  and host execution limits. Split large operations and review partial results.
+- **Schedule never runs:** confirm host cron invokes Grav's scheduler and inspect its logs.
+- **Mode change refused:** PHP may not own the file or the host may prohibit chmod.
+  Ask the host about ownership; do not fix this by making everything world-writable.
+
+For settings and limits, see [Configuration](docs/CONFIGURATION.md). For plugin
+authors, see [Editor adapters](docs/EDITOR-ADAPTERS.md). Report reproducible issues
+with versions and redacted error details on the
+[issue tracker](https://github.com/cdaters/grav-plugin-grav-commander/issues).
+Never include credentials or private file contents.

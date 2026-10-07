@@ -2,13 +2,13 @@ name: Grav Commander
 slug: grav-commander
 type: plugin
 version: 0.4.0
-description: Admin2-first file manager, archive toolkit, and guarded Backup Center for Grav 2.
+description: Dual-pane file manager for Grav 2 Admin2 with automatic editing, ZIP tools and guarded backups.
 icon: folder-tree
 author:
   name: Craig Daters
   email: craig@daters.net
 homepage: https://github.com/cdaters/grav-plugin-grav-commander
-keywords: admin, admin2, backup, developer, editor, media, file, file-manager, archive, restore, schedule, grav2
+keywords: admin, admin2, backup, permissions, markdown, editor, media, file, file-manager, archive, restore, schedule, grav2
 bugs: https://github.com/cdaters/grav-plugin-grav-commander/issues
 docs: https://github.com/cdaters/grav-plugin-grav-commander/blob/main/README.md
 license: MIT

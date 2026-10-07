@@ -1,49 +1,32 @@
-
-
 ## 0.4.0 — 2026-10-06
 
-- Dual-pane workspace with independent roots, paths, breadcrumbs, history, filtering,
-  sorting, multi-selection and a responsive source/destination switch.
-- Coordinated bounded copy/move/delete/archive operations preflight every selected
-  item and destination; collisions require explicit decisions and partial I/O results are explicit.
-- New file creation, folder duplication, image preview, ZIP inspection, keyboard
-  selection/clipboard intent, and single-file desktop drop upload.
-- Pinned raw editor retains unsaved changes across pane navigation; guarded close,
-  reload, Save shortcut, YAML/JSON/frontmatter validation and revision checks on Save.
-- Grav page identities derive from physical page locations, with native editor links;
-  page media, plugin/theme packages and configuration receive contextual labels.
-- Hardened recursive operations against symlinks, special files, root mutations and
-  copying folders into themselves; archive inspection/extraction reject unsafe entries.
-- Fixed empty-root folder creation and empty-content saves; aligned internal versions
-  and Composer keywords. Existing backup/restore and optional Jarvis flows retained.
-
-- RC usability polish: optional Site Safeguard discovery and preferred native advanced
-  workflow; administrator-configured external roots with canonical containment.
-- Raw editor scroll/focus, primary native Grav page editing, accessible themed forms
-  replacing app-owned browser dialogs, and consistent 40px controls in Files/Backups.
-- Planned Ask/Skip/Replace/Keep both-Rename/Cancel, apply-to-remaining and explicit folder
-  merge; stale plans are rejected and replacements preserve configured safety backups.
-- Fixed same-second backup filename collisions and require successful archive close
-  before a replacement proceeds. Version remains 0.4.0; no publication in this RC pass.
-
-- RC follow-up: show physical root boundaries and configuration guidance; add a
-  Markdown formatting toolbar and primary Edit Markdown action with retained raw mode.
-- Honor Jarvis's configured provider and named default through its public bootstrap;
-  load models automatically and ignore stale responses after provider changes.
-
-- RC completion: independent remembered Show hidden files toggles, hidden by default,
-  with component-pattern protected paths enforced separately from visibility.
-- Always-visible Markdown tools in Edit Raw, H1/H2/H3, Undo/Redo, fenced code, table
-  and sandboxed preview; source validation and revision-bound Save remain intact.
-- Per-provider Jarvis catalog reuse and optional public File Vault status/native navigation.
-- Unix owner/group/mode display, informational warnings and guarded chmod with bounded
-  plans, explicit recursive confirmation and honest partial results. No ownership changes.
-
-- Automatic editor resolution with deterministic capability/priority checks and no
-  editor chooser. Caxton uses its public Admin2 field contract for eligible Markdown;
-  other providers may register the documented v1 adapter. Safe native/source fallbacks.
-- Isolated provider buffers retain Commander validation, revision Save, dirty state,
-  Jarvis, theme and focus handling; failures preserve acknowledged unsaved content.
+- Added a dual-pane file workspace with independent roots, history, breadcrumbs,
+  filtering, sorting, multi-selection and a narrow-screen pane switch.
+- Added configured external roots with visible boundaries and setup guidance;
+  root containment, symlink and protected-path checks remain enforced.
+- Added per-pane Show hidden files switches beside navigation controls, off by
+  default and remembered per user/browser without clearing visible selections.
+- Added coordinated copy/move/delete/archive operations, new files, duplication,
+  image/ZIP previews, keyboard shortcuts and single-file drop uploads.
+- Added explicit Ask/Skip/Replace/Keep both-Rename/Cancel collision review, batch
+  decisions and folder merge. Stale plans are refused; partial results are reported.
+  Replacement retains configured safety backups, including unique archive names.
+- Added automatic compatible editor selection with Caxton's public field adapter,
+  a documented provider interface and native Grav/Commander fallbacks. Commander
+  keeps file policy, validation, stale-save protection, unsaved changes and Jarvis.
+- Added Markdown formatting, Undo/Redo and safe preview; editor opening scrolls and
+  focuses without losing pane locations. YAML/JSON/frontmatter are checked on Save.
+- Added clickable octal values in the Permissions column, synchronized owner/group/
+  other bits, presets and octal entry. Recursive chmod requires explicit review;
+  unsupported hosts remain informational. No ownership changes or automatic undo.
+- Replaced app-owned browser prompts with themed accessible dialogs and aligned
+  Files/Backups controls with Admin2 sizing and Light/Dark/Follow OS appearance.
+- Added optional Site Safeguard advanced-workflow navigation and File Vault status/
+  management navigation. Standalone Commander backups remain available.
+- Honor Jarvis's configured provider/default model; load and reuse model catalogs
+  automatically while preserving explicit proposal review, Apply and Save.
+- Rewrote the administrator README, added configuration guidance and removed stale
+  screenshots. Documented optional integration limits, including Revision Ledger.
 
 ## 0.3.15 — 2026-10-05
 
